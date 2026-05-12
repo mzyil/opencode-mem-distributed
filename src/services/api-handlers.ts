@@ -101,9 +101,9 @@ function getProjectPathFromTag(tag: string): string | undefined {
 export async function handleListTags(): Promise<ApiResponse<{ project: TagInfo[] }>> {
   try {
     // Tags are stored as SQLite metadata; embedding model is not needed.
-    // Calling warmup() here would block on @huggingface/transformers init in
-    // the worker thread and hang every read API. Only handlers that compute
-    // similarity (e.g. handleSearch) should warm up the embedding service.
+    // Calling warmup() here would block on local transformer init in the worker
+    // thread and hang every read API. Only handlers that compute similarity
+    // (e.g. handleSearch) should warm up the embedding service.
     const projectShards = shardManager.getAllShards("project", "");
     const tagsMap = new Map<string, TagInfo>();
     for (const shard of projectShards) {

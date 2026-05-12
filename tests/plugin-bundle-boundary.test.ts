@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 describe("OpenCode plugin loader bundle boundary", () => {
-  it("does not pull @huggingface/transformers internals into the plugin-loader bundle", async () => {
+  it("does not pull local embedding transformer internals into the plugin-loader bundle", async () => {
     const result = await Bun.build({
       entrypoints: ["./dist/plugin.js"],
       target: "bun",
@@ -10,6 +10,9 @@ describe("OpenCode plugin loader bundle boundary", () => {
 
     expect(result.success).toBe(true);
     const output = await result.outputs[0]!.text();
+    expect(output).not.toContain("node_modules/@xenova/transformers");
+    expect(output).not.toContain("@xenova/transformers/src");
+    expect(output).not.toContain("@xenova/transformers/dist");
     expect(output).not.toContain("node_modules/@huggingface/transformers");
     expect(output).not.toContain("@huggingface/transformers/dist");
   });

@@ -1,35 +1,32 @@
 import { CONFIG } from "../config.js";
 import { log } from "./logger.js";
 import { join } from "node:path";
-import type { PretrainedModelOptions } from "@huggingface/transformers";
 
 const TIMEOUT_MS = 30000;
 const GLOBAL_EMBEDDING_KEY = Symbol.for("opencode-mem.embedding.instance");
 const MAX_CACHE_SIZE = 100;
 
+type XenovaTransformers = typeof import("@xenova/transformers");
+
 let _transformers: {
-  pipeline: (typeof import("@huggingface/transformers"))["pipeline"];
-  env: (typeof import("@huggingface/transformers"))["env"];
+  pipeline: XenovaTransformers["pipeline"];
+  env: XenovaTransformers["env"];
 } | null = null;
 
 function getTransformersPackageSpecifier(): string {
   // Keep this non-literal so OpenCode/Bun plugin-loader bundling does not eagerly
-  // traverse @huggingface/transformers internals during plugin startup. The package
+  // traverse @xenova/transformers internals during plugin startup. The package
   // is only needed for the local embedding backend, and should stay lazy.
-  return ["@huggingface", "transformers"].join("/");
+  return ["@xenova", "transformers"].join("/");
 }
 
 async function ensureTransformersLoaded(): Promise<NonNullable<typeof _transformers>> {
   if (_transformers !== null) return _transformers;
-  const mod = (await import(
-    getTransformersPackageSpecifier()
-  )) as typeof import("@huggingface/transformers");
+  const mod = (await import(getTransformersPackageSpecifier())) as XenovaTransformers;
   mod.env.allowLocalModels = true;
   mod.env.allowRemoteModels = true;
   mod.env.cacheDir = join(CONFIG.storagePath, ".cache");
-  // CRITICAL: Disable WASM multi-threading. In Node.js/Bun (no SharedArrayBuffer),
-  // ONNX runtime hangs indefinitely during pipeline() init when threads > 1.
-  // See https://github.com/xenova/transformers.js/pull/488
+  // Keep ONNX WASM single-threaded for Bun/Node runtimes without SharedArrayBuffer.
   try {
     (mod.env as any).backends.onnx.wasm.numThreads = 1;
   } catch (e) {
@@ -74,14 +71,9 @@ export class EmbeddingService {
         return;
       }
       const { pipeline } = await ensureTransformersLoaded();
-      const pipelineOptions: PretrainedModelOptions = {
+      this.pipe = await pipeline("feature-extraction", CONFIG.embeddingModel, {
         progress_callback: progressCallback,
-        // Force quantized ONNX. Default is fp32 model.onnx which transformers v4
-        // tries to download from huggingface.co; cache only ships model_quantized.onnx
-        // and HF is unreachable behind GFW, causing init to fail.
-        dtype: "q8",
-      };
-      this.pipe = await pipeline("feature-extraction", CONFIG.embeddingModel, pipelineOptions);
+      });
       this.isWarmedUp = true;
     } catch (error) {
       this.initPromise = null;
