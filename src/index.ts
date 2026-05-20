@@ -140,7 +140,7 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
       } catch (error) {
         log("MemoryStore close failed", { error: String(error) });
       }
-      memoryClient.close();
+      await memoryClient.close();
       process.exit(0);
     } catch (error) {
       log("Shutdown error", { error: String(error) });
