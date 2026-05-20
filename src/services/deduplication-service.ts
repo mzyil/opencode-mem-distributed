@@ -1,8 +1,7 @@
-import { shardManager } from "./sqlite/shard-manager.js";
-import { vectorSearch } from "./sqlite/vector-search.js";
-import { connectionManager } from "./sqlite/connection-manager.js";
+import { getMemoryStore } from "./storage/index.js";
 import { CONFIG } from "../config.js";
 import { log } from "./logger.js";
+import type { MemoryRow, ScopeKey } from "./storage/types.js";
 
 interface DuplicateGroup {
   representative: {
@@ -38,21 +37,21 @@ export class DeduplicationService {
     this.isRunning = true;
 
     try {
-      const userShards = shardManager.getAllShards("user", "");
-      const projectShards = shardManager.getAllShards("project", "");
-      const allShards = [...userShards, ...projectShards];
+      const store = await getMemoryStore();
+      const userScopes = await store.listScopes("user");
+      const projectScopes = await store.listScopes("project");
+      const allScopes: ScopeKey[] = [...userScopes, ...projectScopes];
 
       let exactDeleted = 0;
       const nearDuplicateGroups: DuplicateGroup[] = [];
 
-      for (const shard of allShards) {
-        const db = connectionManager.getConnection(shard.dbPath);
-        const memories = vectorSearch.getAllMemories(db);
+      for (const scope of allScopes) {
+        const memories: MemoryRow[] = await store.list(scope, {});
 
-        const contentMap = new Map<string, any[]>();
+        const contentMap = new Map<string, MemoryRow[]>();
 
         for (const memory of memories) {
-          const key = `${memory.container_tag}:${memory.content}`;
+          const key = `${memory.containerTag}:${memory.content}`;
           if (!contentMap.has(key)) {
             contentMap.set(key, []);
           }
@@ -61,13 +60,12 @@ export class DeduplicationService {
 
         for (const [, duplicates] of contentMap) {
           if (duplicates.length > 1) {
-            duplicates.sort((a, b) => Number(b.created_at) - Number(a.created_at));
+            duplicates.sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
             const toDelete = duplicates.slice(1);
 
             for (const dup of toDelete) {
               try {
-                await vectorSearch.deleteVector(db, dup.id, shard);
-                shardManager.decrementVectorCount(shard.id);
+                await store.delete(scope, dup.id);
                 exactDeleted++;
               } catch (error) {
                 log("Deduplication: delete error", {
@@ -84,25 +82,27 @@ export class DeduplicationService {
 
         for (let i = 0; i < uniqueMemories.length; i++) {
           const mem1 = uniqueMemories[i];
-          if (!mem1.vector || processedIds.has(mem1.id)) continue;
+          if (!mem1 || !mem1.vector || mem1.vector.length === 0 || processedIds.has(mem1.id))
+            continue;
 
-          const vector1 = new Float32Array(new Uint8Array(mem1.vector).buffer);
+          const vector1 = mem1.vector;
           const similarGroup: DuplicateGroup = {
             representative: {
               id: mem1.id,
               content: mem1.content,
-              containerTag: mem1.container_tag,
-              createdAt: mem1.created_at,
+              containerTag: mem1.containerTag,
+              createdAt: mem1.createdAt,
             },
             duplicates: [],
           };
 
           for (let j = i + 1; j < uniqueMemories.length; j++) {
             const mem2 = uniqueMemories[j];
-            if (!mem2.vector || processedIds.has(mem2.id)) continue;
-            if (mem1.container_tag !== mem2.container_tag) continue;
+            if (!mem2 || !mem2.vector || mem2.vector.length === 0 || processedIds.has(mem2.id))
+              continue;
+            if (mem1.containerTag !== mem2.containerTag) continue;
 
-            const vector2 = new Float32Array(new Uint8Array(mem2.vector).buffer);
+            const vector2 = mem2.vector;
             const similarity = this.cosineSimilarity(vector1, vector2);
 
             if (similarity >= CONFIG.deduplicationSimilarityThreshold && similarity < 1.0) {
