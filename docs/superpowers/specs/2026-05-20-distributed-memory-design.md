@@ -252,7 +252,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE memory_vectors (
   memory_id   TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
   kind        TEXT NOT NULL,                       -- 'content' | 'tags'
-  embedding   vector(EMBEDDING_DIMS) NOT NULL,
+  embedding   vector(${EMBEDDING_DIMS}) NOT NULL,   -- substituted from CONFIG.embeddingDimensions at migration time
   scope       TEXT NOT NULL,
   scope_hash  TEXT NOT NULL,
   PRIMARY KEY (memory_id, kind)
