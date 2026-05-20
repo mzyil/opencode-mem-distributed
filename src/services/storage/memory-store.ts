@@ -22,6 +22,9 @@ export interface SearchResult {
   projectName: string | null;
   gitRepoUrl: string | null;
   isPinned: boolean;
+  createdAt: number;
+  updatedAt: number;
+  type: string | null;
 }
 
 export class MemoryStore {
@@ -180,6 +183,9 @@ export class MemoryStore {
         projectName: row.projectName,
         gitRepoUrl: row.gitRepoUrl,
         isPinned: row.isPinned,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+        type: row.type,
       };
     });
 
