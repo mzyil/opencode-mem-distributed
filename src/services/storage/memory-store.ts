@@ -1,5 +1,4 @@
 // src/services/storage/memory-store.ts
-import { log } from "../logger.js";
 import type { VectorBackend } from "../vector-backends/types.js";
 import type {
   ListOptions,
@@ -40,21 +39,24 @@ export class MemoryStore {
   }
 
   async insert(scope: ScopeKey, row: MemoryRow): Promise<void> {
+    const ns = { scope: scope.scope, scopeHash: scope.scopeHash };
     await this.recordStore.insert(scope, row);
     try {
       await this.vectorBackend.insert({
         id: row.id, vector: row.vector,
-        ns: { scope: scope.scope, scopeHash: scope.scopeHash },
+        ns,
         kind: "content",
       });
       if (row.tagsVector) {
         await this.vectorBackend.insert({
           id: row.id, vector: row.tagsVector,
-          ns: { scope: scope.scope, scopeHash: scope.scopeHash },
+          ns,
           kind: "tags",
         });
       }
     } catch (error) {
+      await this.vectorBackend.delete({ id: row.id, ns, kind: "content" }).catch(() => {});
+      await this.vectorBackend.delete({ id: row.id, ns, kind: "tags" }).catch(() => {});
       await this.recordStore.delete(scope, row.id).catch(() => {});
       throw error;
     }
