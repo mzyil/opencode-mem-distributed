@@ -103,6 +103,32 @@ Configure at `~/.config/opencode/opencode-mem.jsonc`:
 }
 ```
 
+### Remote storage (experimental)
+
+Point opencode-mem at a remote database by adding a `storage` block to
+`~/.config/opencode/opencode-mem.jsonc`:
+
+```jsonc
+{
+  "storage": {
+    "recordStore": { "kind": "postgres", "url": "env://DATABASE_URL", "poolSize": 4 },
+    "vectorBackend": { "kind": "usearch" },
+  },
+}
+```
+
+`recordStore.kind` accepts `sqlite` (default), `postgres`, or `libsql`. `vectorBackend.kind` accepts `usearch` (default) or `exact-scan`. Valid combinations: any record store with `usearch` or `exact-scan`; `postgres` additionally supports `pgvector` (reserved for a future release).
+
+To migrate from a local SQLite store to a remote backend:
+
+```bash
+opencode-mem-migrate --to postgres --url "$DATABASE_URL"
+# or
+opencode-mem-migrate --to libsql --url "libsql://your.turso.io" --auth-token "$TOKEN"
+```
+
+The migration is idempotent — re-running with `--resume` skips rows that already exist on the target.
+
 ### Memory Scope
 
 - `scope: "project"`: query only the current project. This is the default.

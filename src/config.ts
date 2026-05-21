@@ -77,6 +77,13 @@ interface OpenCodeMemConfig {
     maxAgeDays?: number;
     injectOn?: "first" | "always";
   };
+  storage?: {
+    recordStore?:
+      | { kind: "sqlite" }
+      | { kind: "postgres"; url: string; ssl?: boolean; poolSize?: number }
+      | { kind: "libsql"; url: string; authToken?: string };
+    vectorBackend?: { kind: "usearch" } | { kind: "exact-scan" } | { kind: "pgvector" };
+  };
 }
 
 const DEFAULTS: Required<
@@ -95,6 +102,7 @@ const DEFAULTS: Required<
     | "autoCaptureLanguage"
     | "userEmailOverride"
     | "userNameOverride"
+    | "storage"
   >
 > & {
   embeddingApiUrl?: string;
@@ -488,9 +496,7 @@ function getEmbeddingDimensions(model: string): number {
 function buildConfig(fileConfig: OpenCodeMemConfig) {
   return {
     storagePath: expandPath(
-      process.env.OPENCODE_MEM_STORAGE_PATH ??
-      fileConfig.storagePath ??
-      DEFAULTS.storagePath
+      process.env.OPENCODE_MEM_STORAGE_PATH ?? fileConfig.storagePath ?? DEFAULTS.storagePath
     ),
     userEmailOverride: fileConfig.userEmailOverride,
     userNameOverride: fileConfig.userNameOverride,
@@ -569,7 +575,44 @@ function buildConfig(fileConfig: OpenCodeMemConfig) {
         | "first"
         | "always",
     },
+    storage: {
+      recordStore: resolveRecordStoreConfig(fileConfig.storage?.recordStore),
+      vectorBackend: resolveVectorBackendConfig(
+        fileConfig.storage?.vectorBackend,
+        fileConfig.vectorBackend // legacy field; back-compat fallback
+      ),
+    },
   };
+}
+
+function resolveRecordStoreConfig(cfg: any) {
+  if (!cfg || cfg.kind === "sqlite") return { kind: "sqlite" as const };
+  if (cfg.kind === "postgres") {
+    return {
+      kind: "postgres" as const,
+      url: resolveSecretValue(cfg.url) ?? "",
+      ssl: cfg.ssl ?? false,
+      poolSize: cfg.poolSize ?? 4,
+    };
+  }
+  if (cfg.kind === "libsql") {
+    return {
+      kind: "libsql" as const,
+      url: resolveSecretValue(cfg.url) ?? "",
+      authToken: resolveSecretValue(cfg.authToken),
+    };
+  }
+  throw new Error(`Unknown storage.recordStore.kind: ${cfg.kind}`);
+}
+
+function resolveVectorBackendConfig(
+  cfg: any,
+  legacy: "usearch-first" | "usearch" | "exact-scan" | undefined
+) {
+  if (cfg?.kind) return { kind: cfg.kind as "usearch" | "exact-scan" | "pgvector" };
+  // Map legacy field. "usearch-first" → "usearch" (the factory still probes).
+  if (legacy === "exact-scan") return { kind: "exact-scan" as const };
+  return { kind: "usearch" as const };
 }
 
 let _globalFileConfig = loadConfigFromPaths(CONFIG_FILES);
