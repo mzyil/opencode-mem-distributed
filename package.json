@@ -19,7 +19,7 @@
     "opencode-mem-migrate": "dist/services/storage/migrate-cli.js"
   },
   "scripts": {
-    "build": "bunx tsc && mkdir -p dist/web && cp -r src/web/* dist/web/ && { [ -d src/services/storage/migrations ] && mkdir -p dist/services/storage && cp -r src/services/storage/migrations dist/services/storage/ || true; }",
+    "build": "bunx tsc && mkdir -p dist/web && cp -r src/web/* dist/web/",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"src/**/*.{ts,js,css,html}\"",
