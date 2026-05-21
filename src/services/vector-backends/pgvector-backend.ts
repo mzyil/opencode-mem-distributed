@@ -100,7 +100,7 @@ export class PgvectorBackend implements VectorBackend {
     return r.rows.map((row) => ({ id: row.id, distance: Number(row.d) }));
   }
 
-  async rebuildFromSource(_args: {
+  async rebuildFromSource(args: {
     ns: NamespaceKey;
     kind: VectorKind;
     source: AsyncIterable<{ id: string; vector: Float32Array }>;
@@ -109,19 +109,19 @@ export class PgvectorBackend implements VectorBackend {
     // — that's intentional from the abstraction, but here it should cost nothing.
     if (process.env.OPENCODE_MEM_PGVECTOR_VERIFY === "1") {
       let sourceCount = 0;
-      for await (const _row of _args.source) sourceCount++;
+      for await (const _row of args.source) sourceCount++;
       const r = await this.opts.pool.query<{ c: number }>(
         `SELECT COUNT(*)::int AS c FROM memory_vectors
          WHERE scope = $1 AND scope_hash = $2 AND kind = $3`,
-        [_args.ns.scope, _args.ns.scopeHash, _args.kind]
+        [args.ns.scope, args.ns.scopeHash, args.kind]
       );
       const dbCount = Number(r.rows[0]?.c ?? 0);
       if (dbCount !== sourceCount) {
         log("PgvectorBackend rebuild detected divergence", {
           sourceCount,
           dbCount,
-          ns: _args.ns,
-          kind: _args.kind,
+          ns: args.ns,
+          kind: args.kind,
         });
       }
     }

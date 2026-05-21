@@ -31,8 +31,11 @@ npx opencode-mem-migrate \
   --vector-backend pgvector
 ```
 
-The CLI is **idempotent** — re-running picks up where it left off
-(`INSERT ... ON CONFLICT DO NOTHING` semantics, emulated at the app layer for v1).
+Pass `--resume` to skip rows that already exist on the target. Without `--resume`,
+duplicate-id errors are surfaced individually (the row is counted as failed and the
+migration continues). Note for `--vector-backend pgvector`: `--resume` skips both the
+`memories` and `memory_vectors` inserts for an existing memory row, so it does not
+back-fill orphaned `memory_vectors` after a partial failure.
 
 ## Connection pool sizing
 

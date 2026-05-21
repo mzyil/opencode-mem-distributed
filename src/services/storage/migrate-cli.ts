@@ -121,9 +121,9 @@ export async function runMigrate(opts: MigrateOptions): Promise<MigrateSummary> 
               });
             }
           } catch (vbErr) {
-            // memories row landed but pgvector side failed. Count as failed; the
-            // user can re-run with --resume to retry (resume skips the memories
-            // insert but we still need pgvector back-fill — see TODO).
+            // memories row landed but pgvector side failed. Counted as a failure here;
+            // note: re-running with --resume currently skips both inserts when the memories
+            // row exists, so pgvector orphans are not back-filled by --resume in v1.
             failed++;
             inserted--;
             console.error(
