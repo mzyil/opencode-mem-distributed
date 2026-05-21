@@ -1,9 +1,9 @@
 import { Kysely, sql } from "kysely";
 
-// Set by bootstrap.ts before migrateToLatest; falls back to 768 if migration is run outside bootstrap
-const DIMS = Number(process.env.OPENCODE_MEM_EMBEDDING_DIMS ?? "768");
-
 export async function up(db: Kysely<any>): Promise<void> {
+  // Set by bootstrap.ts before migrateToLatest; falls back to 768 if migration is run outside bootstrap.
+  // Read at up() time (not module top-level) so test-time env mutations are honored.
+  const DIMS = Number(process.env.OPENCODE_MEM_EMBEDDING_DIMS ?? "768");
   await sql`CREATE EXTENSION IF NOT EXISTS vector`.execute(db);
 
   await sql`
