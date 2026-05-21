@@ -15,6 +15,7 @@ export async function runMigrations(
     db,
     provider: new FileMigrationProvider({ fs, path, migrationFolder }),
   });
+  // 0002_pgvector reads this at module load; must be set before migrateToLatest
   process.env.OPENCODE_MEM_EMBEDDING_DIMS = String(CONFIG.embeddingDimensions);
   const { error, results } = await migrator.migrateToLatest();
   if (error) {
