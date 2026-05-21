@@ -67,15 +67,15 @@ test("pgvector insert + search returns nearest neighbor", async () => {
   expect(got[0].id).toBe("m1");
 });
 
-test("pgvector delete cascade fires on memories delete", async () => {
+test("pgvector delete is a no-op; cascade fires on memories delete", async () => {
   const { PgvectorBackend } =
     await import("../../src/services/vector-backends/pgvector-backend.ts");
   const vb = new PgvectorBackend({ pool, dimensions: 4 });
   await vb.init();
   const ns = { scope: "user" as const, scopeHash: "h2" };
-  await rs.insert(ns, makeRow("m2", [0, 1, 0, 0]));
+  await rs.insert(ns, makeRow("m3", [0, 1, 0, 0]));
   await vb.insert({
-    id: "m2",
+    id: "m3",
     vector: new Float32Array([0, 1, 0, 0]),
     ns,
     kind: "content",
@@ -86,13 +86,25 @@ test("pgvector delete cascade fires on memories delete", async () => {
     queryVector: new Float32Array([0, 1, 0, 0]),
     limit: 1,
   });
-  expect(got[0]?.id).toBe("m2");
-  await rs.delete(ns, "m2");
+  expect(got[0]?.id).toBe("m3");
+  // vb.delete must be a no-op — only the ON DELETE CASCADE from memories
+  // is allowed to remove the pgvector row. If this invariant changes, an
+  // explicit DELETE must be restored to PgvectorBackend.delete.
+  await vb.delete({ id: "m3", ns, kind: "content" });
   got = await vb.search({
     ns,
     kind: "content",
     queryVector: new Float32Array([0, 1, 0, 0]),
     limit: 1,
   });
-  expect(got.find((r) => r.id === "m2")).toBeUndefined();
+  expect(got[0]?.id).toBe("m3");
+  // Now delete from memories — the cascade should remove the pgvector row.
+  await rs.delete(ns, "m3");
+  got = await vb.search({
+    ns,
+    kind: "content",
+    queryVector: new Float32Array([0, 1, 0, 0]),
+    limit: 1,
+  });
+  expect(got.find((r) => r.id === "m3")).toBeUndefined();
 });
