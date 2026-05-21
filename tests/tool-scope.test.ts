@@ -26,6 +26,7 @@ const promptManagerUrl = new URL(
 const webServerUrl = new URL("../src/services/web-server.js", import.meta.url).href;
 const loggerUrl = new URL("../src/services/logger.js", import.meta.url).href;
 const languageUrl = new URL("../src/services/language-detector.js", import.meta.url).href;
+const storageUrl = new URL("../src/services/storage/index.js", import.meta.url).href;
 
 type ScenarioInput = {
   defaultScope?: "project" | "all-projects";
@@ -94,6 +95,10 @@ mock.module(${JSON.stringify(webServerUrl)}, () => ({
   WebServer: class {},
 }));
 mock.module(${JSON.stringify(loggerUrl)}, () => ({ log: () => {} }));
+mock.module(${JSON.stringify(storageUrl)}, () => ({
+  getMemoryStore: async () => ({}),
+  resetMemoryStore: async () => {},
+}));
 mock.module(${JSON.stringify(languageUrl)}, () => ({ getLanguageName: () => "English" }));
 
 const { OpenCodeMemPlugin } = await import(${JSON.stringify(indexUrl)});

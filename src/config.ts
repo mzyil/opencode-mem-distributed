@@ -487,7 +487,11 @@ function getEmbeddingDimensions(model: string): number {
 
 function buildConfig(fileConfig: OpenCodeMemConfig) {
   return {
-    storagePath: expandPath(fileConfig.storagePath ?? DEFAULTS.storagePath),
+    storagePath: expandPath(
+      process.env.OPENCODE_MEM_STORAGE_PATH ??
+      fileConfig.storagePath ??
+      DEFAULTS.storagePath
+    ),
     userEmailOverride: fileConfig.userEmailOverride,
     userNameOverride: fileConfig.userNameOverride,
     embeddingModel: fileConfig.embeddingModel ?? DEFAULTS.embeddingModel,

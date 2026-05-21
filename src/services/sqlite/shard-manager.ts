@@ -4,7 +4,6 @@ import { existsSync } from "node:fs";
 import { CONFIG } from "../../config.js";
 import { connectionManager } from "./connection-manager.js";
 import { log } from "../logger.js";
-import { vectorSearch } from "./vector-search.js";
 import type { ShardInfo } from "./types.js";
 
 const Database = getDatabase();
@@ -15,9 +14,11 @@ const METADATA_DB_NAME = "metadata.db";
 export class ShardManager {
   private metadataDb: DatabaseType;
   private metadataPath: string;
+  private storagePath: string;
 
-  constructor() {
-    this.metadataPath = join(CONFIG.storagePath, METADATA_DB_NAME);
+  constructor(storagePath?: string) {
+    this.storagePath = storagePath ?? CONFIG.storagePath;
+    this.metadataPath = join(this.storagePath, METADATA_DB_NAME);
     this.metadataDb = connectionManager.getConnection(this.metadataPath);
     this.initMetadataDb();
   }
@@ -44,13 +45,13 @@ export class ShardManager {
   }
 
   private getShardPath(scope: "user" | "project", scopeHash: string, shardIndex: number): string {
-    const dir = join(CONFIG.storagePath, `${scope}s`);
+    const dir = join(this.storagePath, `${scope}s`);
     return join(dir, `${scope}_${scopeHash}_shard_${shardIndex}.db`);
   }
 
   private resolveStoredPath(storedPath: string, scope: string): string {
     const fileName = basename(storedPath);
-    return join(CONFIG.storagePath, `${scope}s`, fileName);
+    return join(this.storagePath, `${scope}s`, fileName);
   }
 
   getActiveShard(scope: "user" | "project", scopeHash: string): ShardInfo | null {
@@ -296,16 +297,7 @@ export class ShardManager {
 
     if (row) {
       const fullPath = this.resolveStoredPath(row.db_path, row.scope);
-      await vectorSearch.deleteShardIndexes({
-        id: row.id,
-        scope: row.scope,
-        scopeHash: row.scope_hash,
-        shardIndex: row.shard_index,
-        dbPath: fullPath,
-        vectorCount: row.vector_count,
-        isActive: row.is_active === 1,
-        createdAt: row.created_at,
-      });
+      // TODO(pr-2): dropNamespace via MemoryStore once shard deletion has a backend-agnostic path
       connectionManager.closeConnection(fullPath);
 
       try {

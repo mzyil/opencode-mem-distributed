@@ -10,6 +10,7 @@ import { performAutoCapture } from "./services/auto-capture.js";
 import { performUserProfileLearning } from "./services/user-memory-learning.js";
 import { userPromptManager } from "./services/user-prompt/user-prompt-manager.js";
 import { startWebServer, WebServer } from "./services/web-server.js";
+import { getMemoryStore, resetMemoryStore } from "./services/storage/index.js";
 
 import { isConfigured, CONFIG, initConfig } from "./config.js";
 import { log } from "./services/logger.js";
@@ -33,9 +34,10 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
     // Fire-and-forget: warmup is slow (embedding model load + index rebuild).
     // Awaiting it here serializes opencode's plugin loader and starves the TUI,
     // which gave the symptom "opencode hangs ~70s then disconnects on startup".
-    (async () => {
+    void (async () => {
       try {
         await memoryClient.warmup();
+        await getMemoryStore();
         (globalThis as any)[GLOBAL_PLUGIN_WARMUP_KEY] = true;
       } catch (error) {
         log("Plugin warmup failed", { error: String(error) });
@@ -43,7 +45,7 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
     })();
   }
 
-  (async () => {
+  void (async () => {
     try {
       const { setConnectedProviders, setV2Client, createV2Client } =
         await import("./services/ai/opencode-provider.js");
@@ -133,7 +135,12 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
       if (webServer) {
         await webServer.stop();
       }
-      memoryClient.close();
+      try {
+        await resetMemoryStore();
+      } catch (error) {
+        log("MemoryStore close failed", { error: String(error) });
+      }
+      await memoryClient.close();
       process.exit(0);
     } catch (error) {
       log("Shutdown error", { error: String(error) });
