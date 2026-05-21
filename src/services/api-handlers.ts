@@ -89,7 +89,7 @@ async function getProjectPathFromTag(tag: string): Promise<string | undefined> {
 // Walk every project scope looking for a memory by id. Returns the
 // (scopeKey, row) tuple if found, else null.
 async function findMemoryAcrossProjects(
-  id: string,
+  id: string
 ): Promise<{ scope: ScopeKey; row: MemoryRow } | null> {
   const store = await getMemoryStore();
   const projectScopes = await store.listScopes("project");
@@ -396,7 +396,7 @@ export async function handleUpdateMemory(
     const { scope, row: existing } = found;
 
     const newContent = data.content ?? existing.content;
-    const tags = data.tags ?? (existing.tags ?? []);
+    const tags = data.tags ?? existing.tags ?? [];
 
     const vector = await embeddingService.embedWithTimeout(newContent);
     let tagsVector: Float32Array | null = null;
@@ -471,14 +471,7 @@ export async function handleSearch(
       const { scope, hash } = extractScopeFromTag(tag);
       const scopeKey: ScopeKey = { scope, scopeHash: hash };
       try {
-        memoryResults = await store.search(
-          scopeKey,
-          queryVector,
-          tag,
-          pageSize * 2,
-          0,
-          query,
-        );
+        memoryResults = await store.search(scopeKey, queryVector, tag, pageSize * 2, 0, query);
       } catch (error) {
         log("Scope search error", { scope: scopeKey, error: String(error) });
       }
@@ -493,22 +486,20 @@ export async function handleSearch(
           if (t.containerTag) uniqueTags.add(t.containerTag);
         }
       }
-      for (const containerTag of uniqueTags) {
-        const { scope, hash } = extractScopeFromTag(containerTag);
-        const scopeKey: ScopeKey = { scope, scopeHash: hash };
-        try {
-          const results = await store.search(
-            scopeKey,
-            queryVector,
-            containerTag,
-            pageSize,
-            0,
-            query,
-          );
-          memoryResults.push(...results);
-        } catch (error) {
-          log("Scope search error", { scope: scopeKey, error: String(error) });
-        }
+      const shardResults = await Promise.all(
+        Array.from(uniqueTags).map(async (containerTag) => {
+          const { scope, hash } = extractScopeFromTag(containerTag);
+          const scopeKey: ScopeKey = { scope, scopeHash: hash };
+          try {
+            return await store.search(scopeKey, queryVector, containerTag, pageSize, 0, query);
+          } catch (error) {
+            log("Scope search error", { scope: scopeKey, error: String(error) });
+            return [];
+          }
+        })
+      );
+      for (const results of shardResults) {
+        memoryResults.push(...results);
       }
       promptResults = userPromptManager.searchPrompts(query, undefined, pageSize * 2);
     }
@@ -979,9 +970,7 @@ export async function handleRunTagMigrationBatch(
       const { memory: m, scope } = item;
 
       try {
-        let currentTags = (m.tags ?? [])
-          .map((t) => t.trim().toLowerCase())
-          .filter((t) => t);
+        let currentTags = (m.tags ?? []).map((t) => t.trim().toLowerCase()).filter((t) => t);
 
         if (currentTags.length === 0) {
           const prompt = `Generate 2-4 short technical tags for this memory content:\n\n${m.content}\n\nReturn ONLY a comma-separated list of tags.`;

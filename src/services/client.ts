@@ -94,8 +94,8 @@ export class LocalMemoryClient {
   }
 
   async close(): Promise<void> {
-    const store = await getMemoryStore();
-    await store.close();
+    // MemoryStore lifecycle is owned by resetMemoryStore() in src/index.ts.
+    // Avoid re-instantiating the singleton during shutdown.
   }
 
   async searchMemories(query: string, containerTag: string, scope: MemoryScope = "project") {
@@ -115,18 +115,19 @@ export class LocalMemoryClient {
       let results;
       if (scope === "all-projects") {
         const projectScopes = await store.listScopes("project");
-        const aggregated = [] as Awaited<ReturnType<typeof store.search>>;
-        for (const sk of projectScopes) {
-          const partial = await store.search(
-            sk,
-            queryVector,
-            targetContainerTag,
-            CONFIG.maxMemories,
-            CONFIG.similarityThreshold,
-            query,
-          );
-          aggregated.push(...partial);
-        }
+        const shardResults = await Promise.all(
+          projectScopes.map((sk) =>
+            store.search(
+              sk,
+              queryVector,
+              targetContainerTag,
+              CONFIG.maxMemories,
+              CONFIG.similarityThreshold,
+              query
+            )
+          )
+        );
+        const aggregated = shardResults.flat();
         aggregated.sort((a, b) => b.similarity - a.similarity);
         results = aggregated.slice(0, CONFIG.maxMemories);
       } else {
@@ -136,7 +137,7 @@ export class LocalMemoryClient {
           targetContainerTag,
           CONFIG.maxMemories,
           CONFIG.similarityThreshold,
-          query,
+          query
         );
       }
 

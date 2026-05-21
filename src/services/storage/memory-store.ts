@@ -1,12 +1,6 @@
 // src/services/storage/memory-store.ts
 import type { VectorBackend } from "../vector-backends/types.js";
-import type {
-  ListOptions,
-  MemoryRow,
-  RecordStore,
-  ScopeKey,
-  TagsRow,
-} from "./types.js";
+import type { ListOptions, MemoryRow, RecordStore, ScopeKey, TagsRow } from "./types.js";
 
 export interface SearchResult {
   id: string;
@@ -30,7 +24,7 @@ export interface SearchResult {
 export class MemoryStore {
   constructor(
     private readonly recordStore: RecordStore,
-    private readonly vectorBackend: VectorBackend,
+    private readonly vectorBackend: VectorBackend
   ) {}
 
   async init(): Promise<void> {
@@ -46,13 +40,15 @@ export class MemoryStore {
     await this.recordStore.insert(scope, row);
     try {
       await this.vectorBackend.insert({
-        id: row.id, vector: row.vector,
+        id: row.id,
+        vector: row.vector,
         ns,
         kind: "content",
       });
       if (row.tagsVector) {
         await this.vectorBackend.insert({
-          id: row.id, vector: row.tagsVector,
+          id: row.id,
+          vector: row.tagsVector,
           ns,
           kind: "tags",
         });
@@ -69,7 +65,8 @@ export class MemoryStore {
     await this.recordStore.update(scope, id, patch);
     if (patch.vector) {
       await this.vectorBackend.insert({
-        id, vector: patch.vector,
+        id,
+        vector: patch.vector,
         ns: { scope: scope.scope, scopeHash: scope.scopeHash },
         kind: "content",
       });
@@ -125,15 +122,19 @@ export class MemoryStore {
     containerTag: string,
     limit: number,
     similarityThreshold: number,
-    queryText?: string,
+    queryText?: string
   ): Promise<SearchResult[]> {
     const ns = { scope: scope.scope, scopeHash: scope.scopeHash };
 
     await this.vectorBackend.rebuildFromSource({
-      ns, kind: "content", source: this.recordStore.iterateVectors(scope, "content"),
+      ns,
+      kind: "content",
+      source: this.recordStore.iterateVectors(scope, "content"),
     });
     await this.vectorBackend.rebuildFromSource({
-      ns, kind: "tags", source: this.recordStore.iterateVectors(scope, "tags"),
+      ns,
+      kind: "tags",
+      source: this.recordStore.iterateVectors(scope, "tags"),
     });
 
     const [content, tags] = await Promise.all([
@@ -154,12 +155,15 @@ export class MemoryStore {
 
     const rows = await this.recordStore.getByIds(scope, ids, containerTag);
     const queryWords = queryText
-      ? queryText.toLowerCase().split(/[\s,]+/).filter((w) => w.length > 1)
+      ? queryText
+          .toLowerCase()
+          .split(/[\s,]+/)
+          .filter((w) => w.length > 1)
       : [];
 
     const hydrated: SearchResult[] = rows.map((row) => {
       const scores = scoreMap.get(row.id)!;
-      const memoryTags = (row.tags ?? []).map((t) => t.toLowerCase());
+      const memoryTags = (row.tags ?? []).map((t) => t.trim().toLowerCase());
       let exactBoost = 0;
       if (queryWords.length > 0 && memoryTags.length > 0) {
         const matches = queryWords.filter((w) =>
