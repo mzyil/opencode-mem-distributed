@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S bun run
 // src/services/storage/migrate-cli.ts
 import { CONFIG } from "../../config.js";
 import type { Migratable, MigratableRow } from "./migratable.js";
@@ -70,6 +70,8 @@ export async function runMigrate(opts: MigrateOptions): Promise<MigrateSummary> 
       const { scope, ...memoryRow } = r;
       try {
         if (opts.resume) {
+          // TODO(perf): per-row getById is O(N) round-trips. For huge migrations,
+          // switch to RecordStore.insertIgnoreConflict (dialect ON CONFLICT DO NOTHING).
           const existing = await target.getById(scope, memoryRow.id);
           if (existing) {
             skipped++;
