@@ -1,0 +1,80 @@
+import { test, expect } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+test("migrate CLI copies all rows from SQLite to Postgres", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ocmem-mig-"));
+  const { SqliteRecordStore } =
+    await import("../../src/services/storage/record-stores/sqlite-record-store.ts");
+  const src = new SqliteRecordStore({ storagePath: dir, embeddingDimensions: 4 });
+  await src.init();
+
+  // Seed 5 rows across two scopes.
+  const rows = (id: string, scopeHash: string) => ({
+    scope: { scope: "user" as const, scopeHash },
+    row: {
+      id,
+      content: `content-${id}`,
+      containerTag: "opencode-user",
+      tags: ["alpha", "beta"],
+      type: null,
+      createdAt: 1000,
+      updatedAt: 1000,
+      metadata: { sessionID: `sess-${id}` },
+      displayName: null,
+      userName: null,
+      userEmail: null,
+      projectPath: null,
+      projectName: null,
+      gitRepoUrl: null,
+      isPinned: false,
+      vector: new Float32Array([1, 0, 0, 0]),
+      tagsVector: null,
+    },
+  });
+  for (const [id, h] of [
+    ["m1", "h1"],
+    ["m2", "h1"],
+    ["m3", "h2"],
+    ["m4", "h2"],
+    ["m5", "h2"],
+  ]) {
+    const r = rows(id, h);
+    await src.insert(r.scope, r.row as any);
+  }
+
+  const { startPostgres } = await import("./testcontainer-helpers.ts");
+  const pg = await startPostgres();
+
+  const { runMigrate } = await import("../../src/services/storage/migrate-cli.ts");
+  await runMigrate({
+    to: "postgres",
+    url: pg.url,
+    vectorBackend: "exact-scan",
+    batchSize: 2,
+    dryRun: false,
+    scope: "all",
+    resume: false,
+    source: src,
+    ssl: false,
+  });
+
+  const { PostgresRecordStore } =
+    await import("../../src/services/storage/record-stores/postgres-record-store.ts");
+  const dst = new PostgresRecordStore({ url: pg.url, ssl: false });
+  await dst.init();
+
+  const userScopes = await dst.listScopes("user");
+  expect(userScopes.map((s) => s.scopeHash).sort()).toEqual(["h1", "h2"]);
+  expect(await dst.countAll({ scope: "user", scopeHash: "h1" })).toBe(2);
+  expect(await dst.countAll({ scope: "user", scopeHash: "h2" })).toBe(3);
+  const sample = await dst.getById({ scope: "user", scopeHash: "h1" }, "m1");
+  expect(sample!.content).toBe("content-m1");
+  expect(Array.from(sample!.vector)).toEqual([1, 0, 0, 0]);
+
+  await src.close();
+  await dst.close();
+  await pg.stop();
+  rmSync(dir, { recursive: true, force: true });
+}, 90000);

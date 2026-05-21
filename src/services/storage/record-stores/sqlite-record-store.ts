@@ -1,13 +1,8 @@
 // src/services/storage/record-stores/sqlite-record-store.ts
 import { connectionManager } from "../../sqlite/connection-manager.js";
 import { ShardManager } from "../../sqlite/shard-manager.js";
-import type {
-  ListOptions,
-  MemoryRow,
-  RecordStore,
-  ScopeKey,
-  TagsRow,
-} from "../types.js";
+import type { Migratable, MigratableRow } from "../migratable.js";
+import type { ListOptions, MemoryRow, RecordStore, ScopeKey, TagsRow } from "../types.js";
 
 interface Options {
   storagePath: string;
@@ -48,7 +43,7 @@ function rowToMemory(row: any): MemoryRow {
   };
 }
 
-export class SqliteRecordStore implements RecordStore {
+export class SqliteRecordStore implements RecordStore, Migratable {
   private readonly shardManager: ShardManager;
 
   constructor(private readonly opts: Options) {
@@ -72,7 +67,7 @@ export class SqliteRecordStore implements RecordStore {
       `INSERT INTO memories (id, content, vector, tags_vector, container_tag, tags, type,
         created_at, updated_at, metadata, display_name, user_name, user_email,
         project_path, project_name, git_repo_url, is_pinned)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       row.id,
       row.content,
@@ -90,7 +85,7 @@ export class SqliteRecordStore implements RecordStore {
       row.projectPath,
       row.projectName,
       row.gitRepoUrl,
-      row.isPinned ? 1 : 0,
+      row.isPinned ? 1 : 0
     );
     this.shardManager.incrementVectorCount(shard.id);
   }
@@ -170,7 +165,7 @@ export class SqliteRecordStore implements RecordStore {
       let rows: any[];
       if (opts.sessionId) {
         stmt = db.prepare(
-          `SELECT * FROM memories WHERE metadata LIKE ? ORDER BY created_at DESC LIMIT ?`,
+          `SELECT * FROM memories WHERE metadata LIKE ? ORDER BY created_at DESC LIMIT ?`
         );
         rows = stmt.all(`%"sessionID":"${opts.sessionId}"%`, limit);
       } else if (!opts.containerTag) {
@@ -178,7 +173,7 @@ export class SqliteRecordStore implements RecordStore {
         rows = stmt.all(limit);
       } else {
         stmt = db.prepare(
-          `SELECT * FROM memories WHERE container_tag = ? ORDER BY created_at DESC LIMIT ?`,
+          `SELECT * FROM memories WHERE container_tag = ? ORDER BY created_at DESC LIMIT ?`
         );
         rows = stmt.all(opts.containerTag, limit);
       }
@@ -192,7 +187,9 @@ export class SqliteRecordStore implements RecordStore {
     let total = 0;
     for (const shard of this.shardManager.getAllShards(scope.scope, scope.scopeHash)) {
       const db = connectionManager.getConnection(shard.dbPath);
-      const r: any = db.prepare("SELECT COUNT(*) AS c FROM memories WHERE container_tag = ?").get(containerTag);
+      const r: any = db
+        .prepare("SELECT COUNT(*) AS c FROM memories WHERE container_tag = ?")
+        .get(containerTag);
       total += r.c;
     }
     return total;
@@ -213,10 +210,12 @@ export class SqliteRecordStore implements RecordStore {
     const out: TagsRow[] = [];
     for (const shard of this.shardManager.getAllShards(scope.scope, scope.scopeHash)) {
       const db = connectionManager.getConnection(shard.dbPath);
-      const rows: any[] = db.prepare(
-        `SELECT DISTINCT container_tag, display_name, user_name, user_email,
-          project_path, project_name, git_repo_url FROM memories`,
-      ).all();
+      const rows: any[] = db
+        .prepare(
+          `SELECT DISTINCT container_tag, display_name, user_name, user_email,
+          project_path, project_name, git_repo_url FROM memories`
+        )
+        .all();
       for (const r of rows) {
         const k = JSON.stringify(r);
         if (seen.has(k)) continue;
@@ -241,12 +240,14 @@ export class SqliteRecordStore implements RecordStore {
     const out: MemoryRow[] = [];
     for (const shard of this.shardManager.getAllShards(scope.scope, scope.scopeHash)) {
       const db = connectionManager.getConnection(shard.dbPath);
-      const sql = containerTag === ""
-        ? `SELECT * FROM memories WHERE id IN (${placeholders})`
-        : `SELECT * FROM memories WHERE id IN (${placeholders}) AND container_tag = ?`;
-      const rows: any[] = (containerTag === "")
-        ? db.prepare(sql).all(...ids)
-        : db.prepare(sql).all(...ids, containerTag);
+      const sql =
+        containerTag === ""
+          ? `SELECT * FROM memories WHERE id IN (${placeholders})`
+          : `SELECT * FROM memories WHERE id IN (${placeholders}) AND container_tag = ?`;
+      const rows: any[] =
+        containerTag === ""
+          ? db.prepare(sql).all(...ids)
+          : db.prepare(sql).all(...ids, containerTag);
       for (const r of rows) out.push(rowToMemory(r));
     }
     return out;
@@ -254,7 +255,7 @@ export class SqliteRecordStore implements RecordStore {
 
   iterateVectors(
     scope: ScopeKey,
-    kind: "content" | "tags",
+    kind: "content" | "tags"
   ): AsyncIterable<{ id: string; vector: Float32Array }> {
     const column = kind === "tags" ? "tags_vector" : "vector";
     const shards = this.shardManager.getAllShards(scope.scope, scope.scopeHash);
@@ -262,7 +263,7 @@ export class SqliteRecordStore implements RecordStore {
       for (const shard of shards) {
         const db = connectionManager.getConnection(shard.dbPath);
         const stmt = db.prepare(
-          `SELECT id, ${column} AS blob FROM memories WHERE ${column} IS NOT NULL`,
+          `SELECT id, ${column} AS blob FROM memories WHERE ${column} IS NOT NULL`
         );
         for (const row of stmt.iterate() as Iterable<{ id: string; blob: Uint8Array }>) {
           yield { id: row.id, vector: blobToVector(row.blob) };
@@ -288,6 +289,24 @@ export class SqliteRecordStore implements RecordStore {
       out.push({ scope: scopeKind, scopeHash: s.scopeHash });
     }
     return out;
+  }
+
+  iterateAllRows(): AsyncIterable<MigratableRow> {
+    const sm = this.shardManager;
+    const scopes = ["user", "project"] as const;
+    return (async function* () {
+      for (const scopeKind of scopes) {
+        for (const shard of sm.getAllShards(scopeKind, "")) {
+          const db = connectionManager.getConnection(shard.dbPath);
+          for (const row of db.prepare("SELECT * FROM memories").iterate() as Iterable<any>) {
+            yield {
+              scope: { scope: scopeKind, scopeHash: shard.scopeHash },
+              ...rowToMemory(row),
+            };
+          }
+        }
+      }
+    })();
   }
 
   // Returns the shard that owns `id`, if any.
