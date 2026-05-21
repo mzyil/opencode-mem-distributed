@@ -1,6 +1,7 @@
 #!/usr/bin/env -S bun run
 // src/services/storage/migrate-cli.ts
 import { CONFIG } from "../../config.js";
+import { PgvectorBackend } from "../vector-backends/pgvector-backend.js";
 import type { Migratable, MigratableRow } from "./migratable.js";
 import { LibsqlRecordStore } from "./record-stores/libsql-record-store.js";
 import { PostgresRecordStore } from "./record-stores/postgres-record-store.js";
@@ -40,14 +41,34 @@ export async function runMigrate(opts: MigrateOptions): Promise<MigrateSummary> 
   }
 
   let target: RecordStore;
+  const usePgvector = opts.to === "postgres" && opts.vectorBackend === "pgvector";
   if (opts.to === "postgres") {
-    target = new PostgresRecordStore({ url: opts.url, ssl: opts.ssl });
+    target = new PostgresRecordStore({
+      url: opts.url,
+      ssl: opts.ssl,
+      omitVectorBytes: usePgvector,
+    });
   } else if (opts.to === "libsql") {
     target = new LibsqlRecordStore({ url: opts.url, authToken: opts.authToken });
   } else {
     throw new Error(`Unknown migration target: ${opts.to}`);
   }
   await target.init();
+
+  let vb: PgvectorBackend | null = null;
+  if (usePgvector) {
+    const pgTarget = target as PostgresRecordStore;
+    vb = new PgvectorBackend({
+      pool: pgTarget.getPool(),
+      dimensions: CONFIG.embeddingDimensions,
+    });
+    try {
+      await vb.init();
+    } catch (err) {
+      console.error("[migrate] pgvector extension unavailable on target; aborting:", err);
+      throw err;
+    }
+  }
 
   let inserted = 0;
   let skipped = 0;
@@ -87,6 +108,30 @@ export async function runMigrate(opts: MigrateOptions): Promise<MigrateSummary> 
         }
         await target.insert(scope, memoryRow);
         inserted++;
+        if (vb && !opts.dryRun) {
+          const ns = { scope: scope.scope, scopeHash: scope.scopeHash };
+          try {
+            await vb.insert({ id: memoryRow.id, vector: memoryRow.vector, ns, kind: "content" });
+            if (memoryRow.tagsVector) {
+              await vb.insert({
+                id: memoryRow.id,
+                vector: memoryRow.tagsVector,
+                ns,
+                kind: "tags",
+              });
+            }
+          } catch (vbErr) {
+            // memories row landed but pgvector side failed. Count as failed; the
+            // user can re-run with --resume to retry (resume skips the memories
+            // insert but we still need pgvector back-fill — see TODO).
+            failed++;
+            inserted--;
+            console.error(
+              `[migrate] pgvector insert failed id=${memoryRow.id}:`,
+              vbErr instanceof Error ? vbErr.message : vbErr
+            );
+          }
+        }
       } catch (err) {
         // Idempotent best-effort: if the row already exists, skip silently.
         const existing = await target.getById(scope, memoryRow.id).catch(() => null);
