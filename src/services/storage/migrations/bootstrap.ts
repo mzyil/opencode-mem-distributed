@@ -3,6 +3,7 @@ import { FileMigrationProvider, Migrator, type MigrationResult } from "kysely/mi
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { CONFIG } from "../../../config.js";
 
 export async function runMigrations(
   db: Kysely<any>,
@@ -14,6 +15,7 @@ export async function runMigrations(
     db,
     provider: new FileMigrationProvider({ fs, path, migrationFolder }),
   });
+  process.env.OPENCODE_MEM_EMBEDDING_DIMS = String(CONFIG.embeddingDimensions);
   const { error, results } = await migrator.migrateToLatest();
   if (error) {
     const failed =
