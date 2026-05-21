@@ -1,24 +1,19 @@
 import type {
   BackendInsertItem,
   BackendSearchResult,
+  NamespaceKey,
   VectorBackend,
-  VectorBackendSearchParams,
   VectorKind,
 } from "./types.js";
-import type { ShardInfo } from "../sqlite/types.js";
 
 interface RankedRow {
   id: string;
   vector: Float32Array;
 }
 
-interface VectorRow {
-  id: string;
-  vector?: Uint8Array | ArrayBuffer | null;
-  tags_vector?: Uint8Array | ArrayBuffer | null;
-}
-
 export class ExactScanBackend implements VectorBackend {
+  private readonly vectors = new Map<string, BackendInsertItem[]>();
+
   getBackendName(): string {
     return "exact-scan";
   }
@@ -33,65 +28,74 @@ export class ExactScanBackend implements VectorBackend {
       .slice(0, limit);
   }
 
-  async insert(_args: {
+  async insert(args: {
     id: string;
     vector: Float32Array;
-    shard: ShardInfo;
+    ns: NamespaceKey;
     kind: VectorKind;
-  }): Promise<void> {}
-
-  async insertBatch(_args: {
-    items: BackendInsertItem[];
-    shard: ShardInfo;
-    kind: VectorKind;
-  }): Promise<void> {}
-
-  async delete(_args: { id: string; shard: ShardInfo; kind: VectorKind }): Promise<void> {}
-
-  async search(args: VectorBackendSearchParams): Promise<BackendSearchResult[]> {
-    const column = args.kind === "tags" ? "tags_vector" : "vector";
-    const rows = (
-      args.db as {
-        prepare: (sql: string) => { all: () => VectorRow[] };
-      }
-    )
-      .prepare(`SELECT id, ${column} FROM memories WHERE ${column} IS NOT NULL`)
-      .all();
-
-    if (rows.length === 0) {
-      return [];
+  }): Promise<void> {
+    const key = this.getIndexKey(args.ns, args.kind);
+    const buf = this.vectors.get(key) ?? [];
+    const existing = buf.findIndex((item) => item.id === args.id);
+    if (existing >= 0) {
+      buf[existing] = { id: args.id, vector: args.vector };
+    } else {
+      buf.push({ id: args.id, vector: args.vector });
     }
-
-    const rankedRows: RankedRow[] = rows
-      .map((row) => ({
-        id: row.id,
-        vector: this.decodeVector(args.kind === "tags" ? row.tags_vector : row.vector),
-      }))
-      .filter((row) => row.vector.length > 0);
-
-    return this.rankVectors(rankedRows, args.queryVector, args.limit);
+    this.vectors.set(key, buf);
   }
 
-  async rebuildFromShard(_args: {
-    db: unknown;
-    shard: ShardInfo;
+  async insertBatch(args: {
+    items: BackendInsertItem[];
+    ns: NamespaceKey;
     kind: VectorKind;
-  }): Promise<void> {}
-
-  async deleteShardIndexes(_args: { shard: ShardInfo }): Promise<void> {}
-
-  private decodeVector(value: Uint8Array | ArrayBuffer | null | undefined): Float32Array {
-    if (!value) {
-      return new Float32Array();
+  }): Promise<void> {
+    for (const item of args.items) {
+      await this.insert({ id: item.id, vector: item.vector, ns: args.ns, kind: args.kind });
     }
+  }
 
-    if (value instanceof Uint8Array) {
-      return new Float32Array(
-        value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength)
-      );
+  async delete(args: { id: string; ns: NamespaceKey; kind: VectorKind }): Promise<void> {
+    const key = this.getIndexKey(args.ns, args.kind);
+    const buf = this.vectors.get(key);
+    if (!buf) return;
+    const next = buf.filter((item) => item.id !== args.id);
+    this.vectors.set(key, next);
+  }
+
+  async search(args: {
+    ns: NamespaceKey;
+    kind: VectorKind;
+    queryVector: Float32Array;
+    limit: number;
+  }): Promise<BackendSearchResult[]> {
+    const key = this.getIndexKey(args.ns, args.kind);
+    const buf = this.vectors.get(key) ?? [];
+    if (buf.length === 0) return [];
+    return this.rankVectors(buf, args.queryVector, args.limit);
+  }
+
+  async rebuildFromSource(args: {
+    ns: NamespaceKey;
+    kind: VectorKind;
+    source: AsyncIterable<{ id: string; vector: Float32Array }>;
+  }): Promise<void> {
+    const key = this.getIndexKey(args.ns, args.kind);
+    const buf: BackendInsertItem[] = [];
+    for await (const row of args.source) {
+      if (row.vector.length > 0) buf.push(row);
     }
+    this.vectors.set(key, buf);
+  }
 
-    return new Float32Array(value);
+  async dropNamespace(args: { ns: NamespaceKey }): Promise<void> {
+    for (const kind of ["content", "tags"] as const) {
+      this.vectors.delete(this.getIndexKey(args.ns, kind));
+    }
+  }
+
+  private getIndexKey(ns: NamespaceKey, kind: VectorKind): string {
+    return `${ns.scope}_${ns.scopeHash}_${ns.shardIndex ?? "main"}_${kind}`;
   }
 
   private cosineSimilarity(a: Float32Array, b: Float32Array): number {

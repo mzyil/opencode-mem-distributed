@@ -5,13 +5,8 @@ import { join } from "node:path";
 
 const tempDirs: string[] = [];
 const clientUrl = new URL("../src/services/client.js", import.meta.url).href;
-const connectionManagerUrl = new URL(
-  "../src/services/sqlite/connection-manager.js",
-  import.meta.url
-).href;
+const storageUrl = new URL("../src/services/storage/index.js", import.meta.url).href;
 const embeddingUrl = new URL("../src/services/embedding.js", import.meta.url).href;
-const shardManagerUrl = new URL("../src/services/sqlite/shard-manager.js", import.meta.url).href;
-const vectorSearchUrl = new URL("../src/services/sqlite/vector-search.js", import.meta.url).href;
 
 function runScenario(scriptBody: string) {
   const dir = mkdtempSync(join(tmpdir(), "opencode-mem-memory-scope-"));
@@ -20,70 +15,35 @@ function runScenario(scriptBody: string) {
   const script = `
 import { mock } from "bun:test";
 
-const dbByPath = new Map();
+// Two "project" scopes simulate the previous two-shard fixture; each
+// returns a single memory tagged by its scope hash. The single-scope
+// path (default project) returns one row.
+const projectScopes = [
+  { scope: "project", scopeHash: "shard-a" },
+  { scope: "project", scopeHash: "shard-b" },
+];
 
-function makeShard(id) {
+function rowFor(scopeHash) {
   return {
-    id,
-    scope: "project",
-    scopeHash: "",
-    shardIndex: 0,
-    dbPath: \`/tmp/\${id}.db\`,
-    vectorCount: 0,
-    isActive: true,
-    createdAt: Date.now(),
+    id: scopeHash,
+    content: scopeHash.toUpperCase(),
+    containerTag: "tag-" + scopeHash.slice(-1),
+    tags: null,
+    type: null,
+    createdAt: scopeHash === "shard-a" ? 2 : scopeHash === "shard-b" ? 1 : 3,
+    updatedAt: 0,
+    metadata: null,
+    displayName: null,
+    userName: null,
+    userEmail: null,
+    projectPath: null,
+    projectName: null,
+    gitRepoUrl: null,
+    isPinned: false,
+    vector: new Float32Array([1, 2, 3]),
+    tagsVector: null,
   };
 }
-
-function makeDb(path) {
-  const rows = path.includes("shard-a")
-    ? [{ id: "a", content: "A", created_at: 2, container_tag: "tag-a" }]
-    : path.includes("shard-b")
-      ? [{ id: "b", content: "B", created_at: 1, container_tag: "tag-b" }]
-      : [{ id: "c", content: "C", created_at: 3, container_tag: "current" }];
-
-  return {
-    prepare(sql) {
-      return {
-        all(...args) {
-          if (
-            sql.includes("SELECT * FROM memories") &&
-            sql.includes("ORDER BY created_at DESC") &&
-            !sql.includes("container_tag = ?")
-          ) {
-            return rows;
-          }
-          if (sql.includes("SELECT * FROM memories") && sql.includes("container_tag = ?")) {
-            const tag = args[0];
-            return rows.filter((r) => r.container_tag === tag);
-          }
-          return rows;
-        },
-        get() {
-          return rows[0] ?? null;
-        },
-        run() {},
-      };
-    },
-    listMemories(containerTag) {
-      return containerTag === "" ? rows : rows.filter((r) => r.container_tag === containerTag);
-    },
-    run() {},
-    close() {},
-  };
-}
-
-mock.module(${JSON.stringify(connectionManagerUrl)}, () => ({
-  connectionManager: {
-    getConnection(path) {
-      if (!dbByPath.has(path)) {
-        dbByPath.set(path, makeDb(path));
-      }
-      return dbByPath.get(path);
-    },
-    closeAll() {},
-  },
-}));
 
 mock.module(${JSON.stringify(embeddingUrl)}, () => ({
   embeddingService: {
@@ -93,28 +53,45 @@ mock.module(${JSON.stringify(embeddingUrl)}, () => ({
   },
 }));
 
-mock.module(${JSON.stringify(shardManagerUrl)}, () => ({
-  shardManager: {
-    getAllShards(scope, hash) {
-      return scope === "project" && hash === ""
-        ? [makeShard("shard-a"), makeShard("shard-b")]
-        : [makeShard("shard-current")];
+mock.module(${JSON.stringify(storageUrl)}, () => {
+  const fakeStore = {
+    async init() {},
+    async close() {},
+    async listScopes(kind) {
+      return kind === "project" ? projectScopes : [];
     },
-    getWriteShard() {
-      return makeShard("shard-write");
+    async list(scope) {
+      // Single-scope (default project, hash="current") returns one row;
+      // any all-projects fan-out maps each project scope to its row.
+      return [rowFor(scope.scopeHash || "current")];
     },
-    incrementVectorCount() {},
-  },
-}));
-
-mock.module(${JSON.stringify(vectorSearchUrl)}, () => ({
-  vectorSearch: {
-    searchAcrossShards: async (shards) =>
-      shards.map((s) => ({ id: s.id, memory: s.id, similarity: 1 })),
-    listMemories: (db, containerTag) => db.listMemories(containerTag),
-    insertVector: async () => {},
-  },
-}));
+    async search(scope) {
+      return [{
+        id: scope.scopeHash,
+        memory: scope.scopeHash,
+        similarity: 1,
+        tags: [],
+        containerTag: "tag",
+        displayName: null,
+        userName: null,
+        userEmail: null,
+        projectPath: null,
+        projectName: null,
+        gitRepoUrl: null,
+        isPinned: false,
+      }];
+    },
+    async insert() {},
+    async delete() {},
+    async getById() { return null; },
+  };
+  return {
+    MemoryStore: class {},
+    createMemoryStore: async () => fakeStore,
+    getMemoryStore: async () => fakeStore,
+    resetMemoryStore: async () => {},
+  };
+});
 
 const { memoryClient } = await import(${JSON.stringify(clientUrl)});
 ${scriptBody}
