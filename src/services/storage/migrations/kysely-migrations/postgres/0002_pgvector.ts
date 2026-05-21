@@ -4,6 +4,18 @@ export async function up(db: Kysely<any>): Promise<void> {
   // Set by bootstrap.ts before migrateToLatest; falls back to 768 if migration is run outside bootstrap.
   // Read at up() time (not module top-level) so test-time env mutations are honored.
   const DIMS = Number(process.env.OPENCODE_MEM_EMBEDDING_DIMS ?? "768");
+
+  // Probe for pgvector availability. If the extension isn't installable on this server
+  // (managed DB without the package, stock postgres image), skip creating memory_vectors
+  // and rely on the factory to fall back to USearch when PgvectorBackend.init() fails.
+  // See plan design rule #4.
+  const probe = await sql<{ name: string }>`
+    SELECT name FROM pg_available_extensions WHERE name = 'vector' LIMIT 1
+  `.execute(db);
+  if (probe.rows.length === 0) {
+    return;
+  }
+
   await sql`CREATE EXTENSION IF NOT EXISTS vector`.execute(db);
 
   await sql`
