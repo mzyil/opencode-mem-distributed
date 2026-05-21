@@ -129,6 +129,8 @@ opencode-mem-migrate --to libsql --url "libsql://your.turso.io" --auth-token "$T
 
 The migration is idempotent — re-running with `--resume` skips rows that already exist on the target.
 
+For multi-agent / distributed deployments, see [`examples/README.md`](examples/README.md).
+
 ### Memory Scope
 
 - `scope: "project"`: query only the current project. This is the default.
