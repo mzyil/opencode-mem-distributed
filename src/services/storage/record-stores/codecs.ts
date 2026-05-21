@@ -6,8 +6,11 @@ export function vectorToBuffer(v: Float32Array | null): Buffer | null {
   return Buffer.from(v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength));
 }
 
-export function bufferToVector(b: Buffer | Uint8Array | null | undefined): Float32Array {
+export function bufferToVector(
+  b: Buffer | Uint8Array | ArrayBuffer | null | undefined
+): Float32Array {
   if (!b) return new Float32Array();
+  if (b instanceof ArrayBuffer) return new Float32Array(b.slice(0));
   const u = b instanceof Buffer ? new Uint8Array(b.buffer, b.byteOffset, b.byteLength) : b;
   return new Float32Array(u.buffer.slice(u.byteOffset, u.byteOffset + u.byteLength));
 }
