@@ -1,6 +1,8 @@
 // src/services/storage/factory.ts
 import { CONFIG } from "../../config.js";
+import { log } from "../logger.js";
 import { createVectorBackend } from "../vector-backends/backend-factory.js";
+import { PgvectorBackend } from "../vector-backends/pgvector-backend.js";
 import { MemoryStore } from "./memory-store.js";
 import { LibsqlRecordStore } from "./record-stores/libsql-record-store.js";
 import { PostgresRecordStore } from "./record-stores/postgres-record-store.js";
@@ -31,12 +33,45 @@ export async function createMemoryStore(): Promise<MemoryStore> {
 
   validatePairing(rsCfg.kind as RsKind, vbCfg.kind as VbKind);
 
+  // Special path: Postgres + Pgvector
+  if (rsCfg.kind === "postgres" && vbCfg.kind === "pgvector") {
+    if (!rsCfg.url) throw new Error("storage.recordStore.url is required for postgres");
+    const rs = new PostgresRecordStore({
+      url: rsCfg.url,
+      ssl: rsCfg.ssl,
+      poolSize: rsCfg.poolSize,
+      omitVectorBytes: true,
+    });
+    try {
+      await rs.init();
+    } catch (err) {
+      log("Postgres init failed; cannot use pgvector", { error: String(err) });
+      throw err;
+    }
+    try {
+      const vb = new PgvectorBackend({
+        pool: rs.getPool(),
+        dimensions: CONFIG.embeddingDimensions,
+      });
+      await vb.init();
+      return new MemoryStore(rs, vb);
+    } catch (err) {
+      log("Pgvector unavailable; falling back to USearch", { error: String(err) });
+      await rs.close();
+      const rsFallback = new PostgresRecordStore({
+        url: rsCfg.url,
+        ssl: rsCfg.ssl,
+        poolSize: rsCfg.poolSize,
+        omitVectorBytes: false,
+      });
+      await rsFallback.init();
+      const vb = await createVectorBackend({ vectorBackend: "usearch" });
+      return new MemoryStore(rsFallback, vb);
+    }
+  }
+
   const recordStore = createRecordStore(rsCfg);
   await recordStore.init();
-
-  if (vbCfg.kind === "pgvector") {
-    throw new Error("vectorBackend.kind=pgvector requires PR #3 (PgvectorBackend not yet shipped)");
-  }
 
   const vectorBackend = await createVectorBackend({
     vectorBackend: vbCfg.kind === "exact-scan" ? "exact-scan" : "usearch",

@@ -1,0 +1,12 @@
+// examples/opencode-mem.example.jsonc
+{
+  "storage": {
+    "recordStore": {
+      "kind": "postgres",
+      "url": "env://DATABASE_URL",
+      "poolSize": 4
+    },
+    "vectorBackend": { "kind": "pgvector" }
+  },
+  "embeddingModel": "Xenova/nomic-embed-text-v1"
+}

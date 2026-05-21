@@ -3,6 +3,7 @@ import { FileMigrationProvider, Migrator, type MigrationResult } from "kysely/mi
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { CONFIG } from "../../../config.js";
 
 export async function runMigrations(
   db: Kysely<any>,
@@ -14,6 +15,11 @@ export async function runMigrations(
     db,
     provider: new FileMigrationProvider({ fs, path, migrationFolder }),
   });
+  // 0002_pgvector reads this inside up(); must be set before migrateToLatest.
+  // Respect a pre-set value (used by tests that need a non-default dimension).
+  if (process.env.OPENCODE_MEM_EMBEDDING_DIMS === undefined) {
+    process.env.OPENCODE_MEM_EMBEDDING_DIMS = String(CONFIG.embeddingDimensions);
+  }
   const { error, results } = await migrator.migrateToLatest();
   if (error) {
     const failed =
