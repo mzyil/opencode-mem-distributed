@@ -9,6 +9,7 @@ interface Options {
   url: string;
   ssl?: boolean;
   poolSize?: number;
+  omitVectorBytes?: boolean;
 }
 
 type Db = Kysely<any>;
@@ -54,8 +55,8 @@ export class PostgresRecordStore implements RecordStore {
         is_pinned: row.isPinned,
         created_at: row.createdAt,
         updated_at: row.updatedAt,
-        vector_bytes: vectorToBuffer(row.vector),
-        tags_vector_bytes: vectorToBuffer(row.tagsVector),
+        vector_bytes: this.opts.omitVectorBytes ? null : vectorToBuffer(row.vector),
+        tags_vector_bytes: this.opts.omitVectorBytes ? null : vectorToBuffer(row.tagsVector),
       })
       .execute();
   }
@@ -75,8 +76,10 @@ export class PostgresRecordStore implements RecordStore {
     if (patch.updatedAt !== undefined) set.updated_at = patch.updatedAt;
     if (patch.isPinned !== undefined) set.is_pinned = patch.isPinned;
     if (patch.tags !== undefined) set.tags = joinTags(patch.tags);
-    if (patch.vector !== undefined) set.vector_bytes = vectorToBuffer(patch.vector);
-    if ("tagsVector" in patch) {
+    if (patch.vector !== undefined && !this.opts.omitVectorBytes) {
+      set.vector_bytes = vectorToBuffer(patch.vector);
+    }
+    if ("tagsVector" in patch && !this.opts.omitVectorBytes) {
       set.tags_vector_bytes = vectorToBuffer(patch.tagsVector ?? null);
     }
     if (Object.keys(set).length === 0) return;
@@ -187,10 +190,15 @@ export class PostgresRecordStore implements RecordStore {
     return rows.map((r) => rowFromDb(r, "vector_bytes", "tags_vector_bytes"));
   }
 
+  getPool(): Pool {
+    return this.pool;
+  }
+
   iterateVectors(
     scope: ScopeKey,
     kind: "content" | "tags"
   ): AsyncIterable<{ id: string; vector: Float32Array }> {
+    // When omitVectorBytes is set, this yields nothing — the WHERE filter does the work.
     const col = kind === "tags" ? "tags_vector_bytes" : "vector_bytes";
     const pool = this.pool;
     const s = scope;
