@@ -34,7 +34,7 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
     // Fire-and-forget: warmup is slow (embedding model load + index rebuild).
     // Awaiting it here serializes opencode's plugin loader and starves the TUI,
     // which gave the symptom "opencode hangs ~70s then disconnects on startup".
-    (async () => {
+    void (async () => {
       try {
         await memoryClient.warmup();
         await getMemoryStore();
@@ -45,7 +45,7 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
     })();
   }
 
-  (async () => {
+  void (async () => {
     try {
       const { setConnectedProviders, setV2Client, createV2Client } =
         await import("./services/ai/opencode-provider.js");
