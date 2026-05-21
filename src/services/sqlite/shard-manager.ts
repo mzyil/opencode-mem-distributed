@@ -15,9 +15,11 @@ const METADATA_DB_NAME = "metadata.db";
 export class ShardManager {
   private metadataDb: DatabaseType;
   private metadataPath: string;
+  private storagePath: string;
 
-  constructor() {
-    this.metadataPath = join(CONFIG.storagePath, METADATA_DB_NAME);
+  constructor(storagePath?: string) {
+    this.storagePath = storagePath ?? CONFIG.storagePath;
+    this.metadataPath = join(this.storagePath, METADATA_DB_NAME);
     this.metadataDb = connectionManager.getConnection(this.metadataPath);
     this.initMetadataDb();
   }
@@ -44,13 +46,13 @@ export class ShardManager {
   }
 
   private getShardPath(scope: "user" | "project", scopeHash: string, shardIndex: number): string {
-    const dir = join(CONFIG.storagePath, `${scope}s`);
+    const dir = join(this.storagePath, `${scope}s`);
     return join(dir, `${scope}_${scopeHash}_shard_${shardIndex}.db`);
   }
 
   private resolveStoredPath(storedPath: string, scope: string): string {
     const fileName = basename(storedPath);
-    return join(CONFIG.storagePath, `${scope}s`, fileName);
+    return join(this.storagePath, `${scope}s`, fileName);
   }
 
   getActiveShard(scope: "user" | "project", scopeHash: string): ShardInfo | null {

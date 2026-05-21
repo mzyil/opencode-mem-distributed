@@ -52,7 +52,7 @@ export class SqliteRecordStore implements RecordStore {
   private readonly shardManager: ShardManager;
 
   constructor(private readonly opts: Options) {
-    this.shardManager = new ShardManager();
+    this.shardManager = new ShardManager(opts.storagePath);
   }
 
   async init(): Promise<void> {
