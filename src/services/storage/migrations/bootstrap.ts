@@ -18,6 +18,6 @@ export async function runMigrations(
   if (error) {
     const failed =
       results?.find((r: MigrationResult) => r.status === "Error")?.migrationName ?? "<unknown>";
-    throw new Error(`Migration failed: ${failed}: ${String(error)}`);
+    throw new Error(`Migration failed: ${failed}`, { cause: error });
   }
 }
