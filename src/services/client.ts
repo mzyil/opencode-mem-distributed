@@ -92,8 +92,7 @@ export class LocalMemoryClient {
     try {
       await this.initialize();
 
-      const effectiveScopes: string[] =
-        scopes.length > 0 ? scopes : [CONFIG.memory.defaultScope ?? "project"];
+      const effectiveScopes: string[] = scopes.length > 0 ? scopes : [CONFIG.memory.defaultScope];
       const queryVector = await embeddingService.embedWithTimeout(query);
       const store = await getMemoryStore();
 
@@ -236,8 +235,7 @@ export class LocalMemoryClient {
     try {
       await this.initialize();
 
-      const effectiveScopes: string[] =
-        scopes.length > 0 ? scopes : [CONFIG.memory.defaultScope ?? "project"];
+      const effectiveScopes: string[] = scopes.length > 0 ? scopes : [CONFIG.memory.defaultScope];
       const store = await getMemoryStore();
 
       // "all-projects" expands to every known project scope string.

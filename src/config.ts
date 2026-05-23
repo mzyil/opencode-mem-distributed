@@ -24,7 +24,9 @@ interface OpenCodeMemConfig {
   userEmailOverride?: string;
   userNameOverride?: string;
   memory?: {
-    defaultScope?: "project" | "all-projects";
+    // Fallback scope used when neither the explicit arg nor the session directive provides one.
+    // Keep the legacy "project" value as default so upstream users get unchanged behavior.
+    defaultScope: string;
   };
   embeddingModel?: string;
   embeddingDimensions?: number;
@@ -119,8 +121,10 @@ const DEFAULTS: Required<
   autoCaptureLanguage?: string;
   userEmailOverride?: string;
   userNameOverride?: string;
-  memory?: {
-    defaultScope?: "project" | "all-projects";
+  memory: {
+    // Fallback scope used when neither the explicit arg nor the session directive provides one.
+    // Keep the legacy "project" value as default so upstream users get unchanged behavior.
+    defaultScope: string;
   };
 } = {
   storagePath: join(DATA_DIR, "data"),
