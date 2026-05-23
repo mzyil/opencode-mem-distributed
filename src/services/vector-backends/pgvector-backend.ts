@@ -31,6 +31,17 @@ export class PgvectorBackend implements VectorBackend {
     // This init() is a sanity probe.
     const r = await this.opts.pool.query("SELECT 1 FROM pg_extension WHERE extname = 'vector'");
     if (r.rowCount === 0) throw new Error("pgvector extension is not installed in the target DB");
+    if (process.env.OPENCODE_MEM_DEBUG_EXPLAIN === "true") {
+      const dims = this.opts.dimensions;
+      const planRows = await this.opts.pool.query(
+        `EXPLAIN ANALYZE SELECT memory_id
+           FROM memory_vectors
+           WHERE scope = ANY($1) AND kind = $2
+           ORDER BY embedding <=> $3::vector LIMIT 10`,
+        [["__nonexistent__"], "content", vectorToPgvectorLiteral(new Float32Array(dims))]
+      );
+      log("[pgvector] scope-filter EXPLAIN", { rows: planRows.rows });
+    }
   }
 
   getBackendName(): string {
@@ -83,19 +94,20 @@ export class PgvectorBackend implements VectorBackend {
   }
 
   async search(args: {
-    ns: NamespaceKey;
+    scopes: string[];
     kind: VectorKind;
     queryVector: Float32Array;
     limit: number;
   }): Promise<BackendSearchResult[]> {
+    if (!args.scopes || args.scopes.length === 0) return [];
     const literal = vectorToPgvectorLiteral(args.queryVector);
     const r = await this.opts.pool.query<{ id: string; d: number }>(
       `SELECT memory_id AS id, embedding <=> $1::vector AS d
        FROM memory_vectors
-       WHERE scope = $2 AND scope_hash = $3 AND kind = $4
+       WHERE scope = ANY($2) AND kind = $3
        ORDER BY embedding <=> $1::vector
-       LIMIT $5`,
-      [literal, args.ns.scope, args.ns.scopeHash, args.kind, args.limit]
+       LIMIT $4`,
+      [literal, args.scopes, args.kind, args.limit]
     );
     return r.rows.map((row) => ({ id: row.id, distance: Number(row.d) }));
   }

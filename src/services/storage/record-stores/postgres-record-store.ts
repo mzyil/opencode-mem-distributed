@@ -1,5 +1,5 @@
 // src/services/storage/record-stores/postgres-record-store.ts
-import { Kysely, PostgresDialect, sql } from "kysely";
+import { Kysely, PostgresDialect, sql, type SqlBool } from "kysely";
 import { Pool } from "pg";
 import { runMigrations } from "../migrations/bootstrap.js";
 import type { ListOptions, MemoryRow, RecordStore, ScopeKey, TagsRow } from "../types.js";
@@ -112,12 +112,12 @@ export class PostgresRecordStore implements RecordStore {
     return r ? rowFromDb(r, "vector_bytes", "tags_vector_bytes") : null;
   }
 
-  async list(scope: ScopeKey, opts: ListOptions): Promise<MemoryRow[]> {
+  async list(scopes: string[], opts: ListOptions): Promise<MemoryRow[]> {
+    if (!scopes || scopes.length === 0) return [];
     let q = this.db
       .selectFrom("memories")
       .selectAll()
-      .where("scope", "=", scope.scope)
-      .where("scope_hash", "=", scope.scopeHash);
+      .where(sql<SqlBool>`scope = ANY(${sql.val(scopes)}::text[])`);
     if (opts.sessionId) {
       q = q.where(sql`metadata->>'sessionID'`, "=", opts.sessionId);
     } else if (opts.containerTag) {
@@ -129,28 +129,29 @@ export class PostgresRecordStore implements RecordStore {
     return rows.map((r) => rowFromDb(r, "vector_bytes", "tags_vector_bytes"));
   }
 
-  async countByContainer(scope: ScopeKey, containerTag: string): Promise<number> {
+  async countByContainer(scopes: string[], containerTag: string): Promise<number> {
+    if (!scopes || scopes.length === 0) return 0;
     const r = await this.db
       .selectFrom("memories")
       .select(({ fn }) => [fn.countAll<number>().as("c")])
-      .where("scope", "=", scope.scope)
-      .where("scope_hash", "=", scope.scopeHash)
+      .where(sql<SqlBool>`scope = ANY(${sql.val(scopes)}::text[])`)
       .where("container_tag", "=", containerTag)
       .executeTakeFirst();
     return Number(r?.c ?? 0);
   }
 
-  async countAll(scope: ScopeKey): Promise<number> {
+  async countAll(scopes: string[]): Promise<number> {
+    if (!scopes || scopes.length === 0) return 0;
     const r = await this.db
       .selectFrom("memories")
       .select(({ fn }) => [fn.countAll<number>().as("c")])
-      .where("scope", "=", scope.scope)
-      .where("scope_hash", "=", scope.scopeHash)
+      .where(sql<SqlBool>`scope = ANY(${sql.val(scopes)}::text[])`)
       .executeTakeFirst();
     return Number(r?.c ?? 0);
   }
 
-  async distinctTags(scope: ScopeKey): Promise<TagsRow[]> {
+  async distinctTags(scopes: string[]): Promise<TagsRow[]> {
+    if (!scopes || scopes.length === 0) return [];
     const rows = await this.db
       .selectFrom("memories")
       .select([
@@ -162,8 +163,7 @@ export class PostgresRecordStore implements RecordStore {
         "project_name",
         "git_repo_url",
       ])
-      .where("scope", "=", scope.scope)
-      .where("scope_hash", "=", scope.scopeHash)
+      .where(sql<SqlBool>`scope = ANY(${sql.val(scopes)}::text[])`)
       .distinct()
       .execute();
     return rows.map((r) => ({
@@ -177,13 +177,12 @@ export class PostgresRecordStore implements RecordStore {
     }));
   }
 
-  async getByIds(scope: ScopeKey, ids: string[], containerTag: string): Promise<MemoryRow[]> {
-    if (ids.length === 0) return [];
+  async getByIds(scopes: string[], ids: string[], containerTag: string): Promise<MemoryRow[]> {
+    if (ids.length === 0 || !scopes || scopes.length === 0) return [];
     let q = this.db
       .selectFrom("memories")
       .selectAll()
-      .where("scope", "=", scope.scope)
-      .where("scope_hash", "=", scope.scopeHash)
+      .where(sql<SqlBool>`scope = ANY(${sql.val(scopes)}::text[])`)
       .where("id", "in", ids);
     if (containerTag !== "") q = q.where("container_tag", "=", containerTag);
     const rows = await q.execute();
@@ -192,6 +191,17 @@ export class PostgresRecordStore implements RecordStore {
 
   getPool(): Pool {
     return this.pool;
+  }
+
+  async lookupScopeKeys(scopes: string[]): Promise<ScopeKey[]> {
+    if (!scopes || scopes.length === 0) return [];
+    const rows = await this.db
+      .selectFrom("memories")
+      .select(["scope", "scope_hash"])
+      .where(sql<SqlBool>`scope = ANY(${sql.val(scopes)}::text[])`)
+      .distinct()
+      .execute();
+    return rows.map((r) => ({ scope: r.scope as string, scopeHash: r.scope_hash as string }));
   }
 
   iterateVectors(

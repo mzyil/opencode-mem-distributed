@@ -46,7 +46,7 @@ export class DeduplicationService {
       const nearDuplicateGroups: DuplicateGroup[] = [];
 
       for (const scope of allScopes) {
-        const memories: MemoryRow[] = await store.list(scope, {});
+        const memories: MemoryRow[] = await store.list([scope.scope], {});
 
         const contentMap = new Map<string, MemoryRow[]>();
 

@@ -36,7 +36,7 @@ export interface VectorBackend {
   delete(args: { id: string; ns: NamespaceKey; kind: VectorKind }): Promise<void>;
 
   search(args: {
-    ns: NamespaceKey;
+    scopes: string[];
     kind: VectorKind;
     queryVector: Float32Array;
     limit: number;

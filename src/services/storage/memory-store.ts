@@ -92,20 +92,20 @@ export class MemoryStore {
     return this.recordStore.getById(scope, id);
   }
 
-  list(scope: ScopeKey, opts: ListOptions): Promise<MemoryRow[]> {
-    return this.recordStore.list(scope, opts);
+  list(scopes: string[], opts: ListOptions): Promise<MemoryRow[]> {
+    return this.recordStore.list(scopes, opts);
   }
 
-  countByContainer(scope: ScopeKey, containerTag: string): Promise<number> {
-    return this.recordStore.countByContainer(scope, containerTag);
+  countByContainer(scopes: string[], containerTag: string): Promise<number> {
+    return this.recordStore.countByContainer(scopes, containerTag);
   }
 
-  countAll(scope: ScopeKey): Promise<number> {
-    return this.recordStore.countAll(scope);
+  countAll(scopes: string[]): Promise<number> {
+    return this.recordStore.countAll(scopes);
   }
 
-  distinctTags(scope: ScopeKey): Promise<TagsRow[]> {
-    return this.recordStore.distinctTags(scope);
+  distinctTags(scopes: string[]): Promise<TagsRow[]> {
+    return this.recordStore.distinctTags(scopes);
   }
 
   // Legacy scope enumeration kept for back-compat with old data shapes.
@@ -119,29 +119,40 @@ export class MemoryStore {
   }
 
   async search(
-    scope: ScopeKey,
+    scopes: string[],
     queryVector: Float32Array,
     containerTag: string,
     limit: number,
     similarityThreshold: number,
     queryText?: string
   ): Promise<SearchResult[]> {
-    const ns = { scope: scope.scope, scopeHash: scope.scopeHash };
+    if (!scopes || scopes.length === 0) return [];
 
-    await this.vectorBackend.rebuildFromSource({
-      ns,
-      kind: "content",
-      source: this.recordStore.iterateVectors(scope, "content"),
-    });
-    await this.vectorBackend.rebuildFromSource({
-      ns,
-      kind: "tags",
-      source: this.recordStore.iterateVectors(scope, "tags"),
-    });
+    // Restore in-memory ANN indexes on cold process restart with a persistent record store
+    // (e.g. sqlite+usearch). For pgvector, rebuildFromSource is a no-op; for exact-scan and
+    // usearch it repopulates the in-memory index from the record store on first encounter.
+    const scopeKeys = await this.recordStore.lookupScopeKeys(scopes);
+    await Promise.all(
+      scopeKeys.flatMap((sk) => {
+        const ns = { scope: sk.scope, scopeHash: sk.scopeHash };
+        return [
+          this.vectorBackend.rebuildFromSource({
+            ns,
+            kind: "content",
+            source: this.recordStore.iterateVectors(sk, "content"),
+          }),
+          this.vectorBackend.rebuildFromSource({
+            ns,
+            kind: "tags",
+            source: this.recordStore.iterateVectors(sk, "tags"),
+          }),
+        ];
+      })
+    );
 
     const [content, tags] = await Promise.all([
-      this.vectorBackend.search({ ns, kind: "content", queryVector, limit: limit * 4 }),
-      this.vectorBackend.search({ ns, kind: "tags", queryVector, limit: limit * 4 }),
+      this.vectorBackend.search({ scopes, kind: "content", queryVector, limit: limit * 4 }),
+      this.vectorBackend.search({ scopes, kind: "tags", queryVector, limit: limit * 4 }),
     ]);
 
     const scoreMap = new Map<string, { contentSim: number; tagsSim: number }>();
@@ -155,7 +166,7 @@ export class MemoryStore {
     const ids = Array.from(scoreMap.keys());
     if (ids.length === 0) return [];
 
-    const rows = await this.recordStore.getByIds(scope, ids, containerTag);
+    const rows = await this.recordStore.getByIds(scopes, ids, containerTag);
     const queryWords = queryText
       ? queryText
           .toLowerCase()

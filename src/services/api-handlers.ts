@@ -76,7 +76,7 @@ async function getProjectPathFromTag(tag: string): Promise<string | undefined> {
   const store = await getMemoryStore();
   const projectScopes = await store.listScopes("project");
   for (const sk of projectScopes) {
-    const tags = await store.distinctTags(sk);
+    const tags = await store.distinctTags([sk.scope]);
     for (const t of tags) {
       if (t.containerTag === tag && t.projectPath) {
         return t.projectPath;
@@ -110,7 +110,7 @@ export async function handleListTags(): Promise<ApiResponse<{ project: TagInfo[]
     const projectScopes = await store.listScopes("project");
     const tagsMap = new Map<string, TagInfo>();
     for (const sk of projectScopes) {
-      const tags = await store.distinctTags(sk);
+      const tags = await store.distinctTags([sk.scope]);
       for (const t of tags) {
         if (t.containerTag && !tagsMap.has(t.containerTag)) {
           tagsMap.set(t.containerTag, {
@@ -152,11 +152,11 @@ export async function handleListMemories(
     if (tag) {
       const { scope, hash } = extractScopeFromTag(tag);
       const scopeKey: ScopeKey = { scope, scopeHash: hash };
-      allMemories = await store.list(scopeKey, { containerTag: tag, limit: 10000 });
+      allMemories = await store.list([scopeKey.scope], { containerTag: tag, limit: 10000 });
     } else {
       const projectScopes = await store.listScopes("project");
       for (const sk of projectScopes) {
-        const rows = await store.list(sk, {});
+        const rows = await store.list([sk.scope], {});
         allMemories.push(...rows.filter((m) => m.containerTag?.includes(`_project_`)));
       }
     }
@@ -471,7 +471,14 @@ export async function handleSearch(
       const { scope, hash } = extractScopeFromTag(tag);
       const scopeKey: ScopeKey = { scope, scopeHash: hash };
       try {
-        memoryResults = await store.search(scopeKey, queryVector, tag, pageSize * 2, 0, query);
+        memoryResults = await store.search(
+          [scopeKey.scope],
+          queryVector,
+          tag,
+          pageSize * 2,
+          0,
+          query
+        );
       } catch (error) {
         log("Scope search error", { scope: scopeKey, error: String(error) });
       }
@@ -481,7 +488,7 @@ export async function handleSearch(
       const projectScopes = await store.listScopes("project");
       const uniqueTags = new Set<string>();
       for (const sk of projectScopes) {
-        const tags = await store.distinctTags(sk);
+        const tags = await store.distinctTags([sk.scope]);
         for (const t of tags) {
           if (t.containerTag) uniqueTags.add(t.containerTag);
         }
@@ -491,7 +498,14 @@ export async function handleSearch(
           const { scope, hash } = extractScopeFromTag(containerTag);
           const scopeKey: ScopeKey = { scope, scopeHash: hash };
           try {
-            return await store.search(scopeKey, queryVector, containerTag, pageSize, 0, query);
+            return await store.search(
+              [scopeKey.scope],
+              queryVector,
+              containerTag,
+              pageSize,
+              0,
+              query
+            );
           } catch (error) {
             log("Scope search error", { scope: scopeKey, error: String(error) });
             return [];
@@ -626,7 +640,7 @@ export async function handleStats(): Promise<
       projectCount = 0;
     const typeCount: Record<string, number> = {};
     for (const sk of projectScopes) {
-      const rows = await store.list(sk, {});
+      const rows = await store.list([sk.scope], {});
       for (const r of rows) {
         if (r.containerTag?.includes("_user_")) userCount++;
         else if (r.containerTag?.includes("_project_")) projectCount++;
@@ -897,7 +911,7 @@ export async function handleDetectTagMigration(): Promise<
     const projectScopes = await store.listScopes("project");
     let untaggedCount = 0;
     for (const sk of projectScopes) {
-      const rows = await store.list(sk, {});
+      const rows = await store.list([sk.scope], {});
       for (const r of rows) {
         if (!r.tags || r.tags.length === 0) untaggedCount++;
       }
@@ -949,7 +963,7 @@ export async function handleRunTagMigrationBatch(
     const allMemories: { memory: MemoryRow; scope: ScopeKey }[] = [];
 
     for (const sk of projectScopes) {
-      const rows = await store.list(sk, {});
+      const rows = await store.list([sk.scope], {});
       for (const m of rows) {
         allMemories.push({ memory: m, scope: sk });
       }

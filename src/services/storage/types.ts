@@ -54,16 +54,20 @@ export interface RecordStore {
   delete(scope: ScopeKey, id: string): Promise<void>;
   getById(scope: ScopeKey, id: string): Promise<MemoryRow | null>;
 
-  list(scope: ScopeKey, opts: ListOptions): Promise<MemoryRow[]>;
-  countByContainer(scope: ScopeKey, containerTag: string): Promise<number>;
-  countAll(scope: ScopeKey): Promise<number>;
-  distinctTags(scope: ScopeKey): Promise<TagsRow[]>;
+  list(scopes: string[], opts: ListOptions): Promise<MemoryRow[]>;
+  countByContainer(scopes: string[], containerTag: string): Promise<number>;
+  countAll(scopes: string[]): Promise<number>;
+  distinctTags(scopes: string[]): Promise<TagsRow[]>;
 
-  getByIds(scope: ScopeKey, ids: string[], containerTag: string): Promise<MemoryRow[]>;
+  getByIds(scopes: string[], ids: string[], containerTag: string): Promise<MemoryRow[]>;
   iterateVectors(
     scope: ScopeKey,
     kind: "content" | "tags"
   ): AsyncIterable<{ id: string; vector: Float32Array }>;
+
+  /** Return all distinct ScopeKey values whose scope label is in `scopes`.
+   *  Used by MemoryStore.search() to call rebuildFromSource on cold restart. */
+  lookupScopeKeys(scopes: string[]): Promise<ScopeKey[]>;
 
   setPinned(scope: ScopeKey, id: string, pinned: boolean): Promise<void>;
   // Legacy scope enumeration kept for back-compat with old data shapes.

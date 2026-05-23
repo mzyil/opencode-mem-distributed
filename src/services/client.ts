@@ -37,16 +37,6 @@ function extractScopeFromContainerTag(containerTag: string): {
   return { scope: "user", hash: containerTag };
 }
 
-function resolveScopeKey(
-  scope: MemoryScope,
-  containerTag: string
-): { scope: string; hash: string } {
-  if (scope === "all-projects") {
-    return { scope: "project", hash: "" };
-  }
-  return extractScopeFromContainerTag(containerTag);
-}
-
 export class LocalMemoryClient {
   private initPromise: Promise<void> | null = null;
   private isInitialized: boolean = false;
@@ -102,48 +92,30 @@ export class LocalMemoryClient {
     try {
       await this.initialize();
 
-      // Task 2 widens the public signature to scopes[]. Task 3 will teach the
-      // storage layer to consume the full array; until then we forward only scopes[0].
-      const internalScope: MemoryScope = (scopes[0] ?? CONFIG.memory.defaultScope) as MemoryScope;
-
+      const effectiveScopes: string[] =
+        scopes.length > 0 ? scopes : [CONFIG.memory.defaultScope ?? "project"];
       const queryVector = await embeddingService.embedWithTimeout(query);
-      const resolved = resolveScopeKey(internalScope, containerTag);
-      const scopeKey: ScopeKey = { scope: resolved.scope, scopeHash: resolved.hash };
       const store = await getMemoryStore();
 
-      const targetContainerTag = internalScope === "all-projects" ? "" : containerTag;
-
-      // When the resolved hash is empty we span every project; otherwise
-      // it's a single hashed scope. MemoryStore.search is scope-local,
-      // so for cross-project search we have to fan out.
-      let results;
-      if (internalScope === "all-projects") {
-        const projectScopes = await store.listScopes("project");
-        const shardResults = await Promise.all(
-          projectScopes.map((sk) =>
-            store.search(
-              sk,
-              queryVector,
-              targetContainerTag,
-              CONFIG.maxMemories,
-              CONFIG.similarityThreshold,
-              query
-            )
-          )
-        );
-        const aggregated = shardResults.flat();
-        aggregated.sort((a, b) => b.similarity - a.similarity);
-        results = aggregated.slice(0, CONFIG.maxMemories);
+      // "all-projects" expands to every known project scope string.
+      let resolvedScopes: string[];
+      if (effectiveScopes.includes("all-projects")) {
+        const projectScopeKeys = await store.listScopes("project");
+        resolvedScopes = projectScopeKeys.map((sk) => sk.scope);
       } else {
-        results = await store.search(
-          scopeKey,
-          queryVector,
-          targetContainerTag,
-          CONFIG.maxMemories,
-          CONFIG.similarityThreshold,
-          query
-        );
+        resolvedScopes = effectiveScopes;
       }
+
+      const targetContainerTag = effectiveScopes.includes("all-projects") ? "" : containerTag;
+
+      const results = await store.search(
+        resolvedScopes,
+        queryVector,
+        targetContainerTag,
+        CONFIG.maxMemories,
+        CONFIG.similarityThreshold,
+        query
+      );
 
       return { success: true as const, results, total: results.length, timing: 0 };
     } catch (error) {
@@ -264,26 +236,25 @@ export class LocalMemoryClient {
     try {
       await this.initialize();
 
-      // Task 2 widens the public signature to scopes[]. Task 3 will teach the
-      // storage layer to consume the full array; until then we forward only scopes[0].
-      const internalScope: MemoryScope = (scopes[0] ?? CONFIG.memory.defaultScope) as MemoryScope;
-
-      const resolved = resolveScopeKey(internalScope, containerTag);
+      const effectiveScopes: string[] =
+        scopes.length > 0 ? scopes : [CONFIG.memory.defaultScope ?? "project"];
       const store = await getMemoryStore();
 
-      const targetContainerTag = internalScope === "all-projects" ? "" : containerTag;
-
-      let allMemories: MemoryRow[] = [];
-      if (internalScope === "all-projects") {
-        const projectScopes = await store.listScopes("project");
-        for (const sk of projectScopes) {
-          const rows = await store.list(sk, { containerTag: targetContainerTag, limit });
-          allMemories.push(...rows);
-        }
+      // "all-projects" expands to every known project scope string.
+      let resolvedScopes: string[];
+      if (effectiveScopes.includes("all-projects")) {
+        const projectScopeKeys = await store.listScopes("project");
+        resolvedScopes = projectScopeKeys.map((sk) => sk.scope);
       } else {
-        const scopeKey: ScopeKey = { scope: resolved.scope, scopeHash: resolved.hash };
-        allMemories = await store.list(scopeKey, { containerTag: targetContainerTag, limit });
+        resolvedScopes = effectiveScopes;
       }
+
+      const targetContainerTag = effectiveScopes.includes("all-projects") ? "" : containerTag;
+
+      const allMemories: MemoryRow[] = await store.list(resolvedScopes, {
+        containerTag: targetContainerTag,
+        limit,
+      });
 
       allMemories.sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
 
@@ -321,11 +292,10 @@ export class LocalMemoryClient {
     try {
       await this.initialize();
 
-      const { scope, hash } = extractScopeFromContainerTag(containerTag);
-      const scopeKey: ScopeKey = { scope, scopeHash: hash };
+      const { scope } = extractScopeFromContainerTag(containerTag);
       const store = await getMemoryStore();
 
-      const rows = await store.list(scopeKey, { sessionId: sessionID, limit });
+      const rows = await store.list([scope], { sessionId: sessionID, limit });
 
       rows.sort((a, b) => b.createdAt - a.createdAt);
 
