@@ -1,6 +1,11 @@
 // src/services/storage/types.ts
+
+// Free-form scope label. By convention, "<domain>:<type>:<id>" — see README.
+// Empty string is reserved as an internal sentinel meaning "no scope filter applied".
+export type Scope = string;
+
 export interface ScopeKey {
-  scope: "user" | "project";
+  scope: Scope;
   scopeHash: string;
 }
 
@@ -61,5 +66,7 @@ export interface RecordStore {
   ): AsyncIterable<{ id: string; vector: Float32Array }>;
 
   setPinned(scope: ScopeKey, id: string, pinned: boolean): Promise<void>;
-  listScopes(scope: "user" | "project"): Promise<ScopeKey[]>;
+  // Legacy scope enumeration kept for back-compat with old data shapes.
+  // New callers should use list-by-prefix or scope-array reads instead.
+  listScopes(legacyScopeKind: "user" | "project"): Promise<ScopeKey[]>;
 }

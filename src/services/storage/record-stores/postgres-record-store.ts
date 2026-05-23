@@ -231,6 +231,8 @@ export class PostgresRecordStore implements RecordStore {
       .execute();
   }
 
+  // Legacy scope enumeration kept for back-compat with old data shapes.
+  // New callers should use list-by-prefix or scope-array reads instead.
   async listScopes(kind: "user" | "project"): Promise<ScopeKey[]> {
     const rows = await this.db
       .selectFrom("memories")

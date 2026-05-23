@@ -108,6 +108,8 @@ export class MemoryStore {
     return this.recordStore.distinctTags(scope);
   }
 
+  // Legacy scope enumeration kept for back-compat with old data shapes.
+  // New callers should use list-by-prefix or scope-array reads instead.
   listScopes(kind: "user" | "project"): Promise<ScopeKey[]> {
     return this.recordStore.listScopes(kind);
   }

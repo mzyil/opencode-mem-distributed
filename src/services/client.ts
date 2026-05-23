@@ -5,7 +5,7 @@ import { CONFIG } from "../config.js";
 import { log } from "./logger.js";
 import type { MemoryType } from "../types/index.js";
 
-export type MemoryScope = "project" | "all-projects";
+export type MemoryScope = string;
 
 function safeToISOString(timestamp: any): string {
   try {
@@ -25,12 +25,12 @@ function safeToISOString(timestamp: any): string {
 }
 
 function extractScopeFromContainerTag(containerTag: string): {
-  scope: "user" | "project";
+  scope: string;
   hash: string;
 } {
   const parts = containerTag.split("_");
   if (parts.length >= 3) {
-    const scope = parts[1] as "user" | "project";
+    const scope = parts[1]!;
     const hash = parts.slice(2).join("_");
     return { scope, hash };
   }
@@ -40,7 +40,7 @@ function extractScopeFromContainerTag(containerTag: string): {
 function resolveScopeKey(
   scope: MemoryScope,
   containerTag: string
-): { scope: "user" | "project"; hash: string } {
+): { scope: string; hash: string } {
   if (scope === "all-projects") {
     return { scope: "project", hash: "" };
   }

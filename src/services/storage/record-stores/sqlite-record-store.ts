@@ -1,6 +1,6 @@
 // src/services/storage/record-stores/sqlite-record-store.ts
 import { connectionManager } from "../../sqlite/connection-manager.js";
-import { ShardManager } from "../../sqlite/shard-manager.js";
+import { toLegacyShardScope, ShardManager } from "../../sqlite/shard-manager.js";
 import type { Migratable, MigratableRow } from "../migratable.js";
 import type { ListOptions, MemoryRow, RecordStore, ScopeKey, TagsRow } from "../types.js";
 
@@ -61,7 +61,7 @@ export class SqliteRecordStore implements RecordStore, Migratable {
   }
 
   async insert(scope: ScopeKey, row: MemoryRow): Promise<void> {
-    const shard = this.shardManager.getWriteShard(scope.scope, scope.scopeHash);
+    const shard = this.shardManager.getWriteShard(toLegacyShardScope(scope.scope), scope.scopeHash);
     const db = connectionManager.getConnection(shard.dbPath);
     db.prepare(
       `INSERT INTO memories (id, content, vector, tags_vector, container_tag, tags, type,
@@ -148,7 +148,10 @@ export class SqliteRecordStore implements RecordStore, Migratable {
   }
 
   async getById(scope: ScopeKey, id: string): Promise<MemoryRow | null> {
-    for (const shard of this.shardManager.getAllShards(scope.scope, scope.scopeHash)) {
+    for (const shard of this.shardManager.getAllShards(
+      toLegacyShardScope(scope.scope),
+      scope.scopeHash
+    )) {
       const db = connectionManager.getConnection(shard.dbPath);
       const row = db.prepare("SELECT * FROM memories WHERE id = ?").get(id);
       if (row) return rowToMemory(row);
@@ -159,7 +162,10 @@ export class SqliteRecordStore implements RecordStore, Migratable {
   async list(scope: ScopeKey, opts: ListOptions): Promise<MemoryRow[]> {
     const out: MemoryRow[] = [];
     const limit = opts.limit ?? 10000;
-    for (const shard of this.shardManager.getAllShards(scope.scope, scope.scopeHash)) {
+    for (const shard of this.shardManager.getAllShards(
+      toLegacyShardScope(scope.scope),
+      scope.scopeHash
+    )) {
       const db = connectionManager.getConnection(shard.dbPath);
       let stmt: any;
       let rows: any[];
@@ -185,7 +191,10 @@ export class SqliteRecordStore implements RecordStore, Migratable {
 
   async countByContainer(scope: ScopeKey, containerTag: string): Promise<number> {
     let total = 0;
-    for (const shard of this.shardManager.getAllShards(scope.scope, scope.scopeHash)) {
+    for (const shard of this.shardManager.getAllShards(
+      toLegacyShardScope(scope.scope),
+      scope.scopeHash
+    )) {
       const db = connectionManager.getConnection(shard.dbPath);
       const r: any = db
         .prepare("SELECT COUNT(*) AS c FROM memories WHERE container_tag = ?")
@@ -197,7 +206,10 @@ export class SqliteRecordStore implements RecordStore, Migratable {
 
   async countAll(scope: ScopeKey): Promise<number> {
     let total = 0;
-    for (const shard of this.shardManager.getAllShards(scope.scope, scope.scopeHash)) {
+    for (const shard of this.shardManager.getAllShards(
+      toLegacyShardScope(scope.scope),
+      scope.scopeHash
+    )) {
       const db = connectionManager.getConnection(shard.dbPath);
       const r: any = db.prepare("SELECT COUNT(*) AS c FROM memories").get();
       total += r.c;
@@ -208,7 +220,10 @@ export class SqliteRecordStore implements RecordStore, Migratable {
   async distinctTags(scope: ScopeKey): Promise<TagsRow[]> {
     const seen = new Set<string>();
     const out: TagsRow[] = [];
-    for (const shard of this.shardManager.getAllShards(scope.scope, scope.scopeHash)) {
+    for (const shard of this.shardManager.getAllShards(
+      toLegacyShardScope(scope.scope),
+      scope.scopeHash
+    )) {
       const db = connectionManager.getConnection(shard.dbPath);
       const rows: any[] = db
         .prepare(
@@ -238,7 +253,10 @@ export class SqliteRecordStore implements RecordStore, Migratable {
     if (ids.length === 0) return [];
     const placeholders = ids.map(() => "?").join(",");
     const out: MemoryRow[] = [];
-    for (const shard of this.shardManager.getAllShards(scope.scope, scope.scopeHash)) {
+    for (const shard of this.shardManager.getAllShards(
+      toLegacyShardScope(scope.scope),
+      scope.scopeHash
+    )) {
       const db = connectionManager.getConnection(shard.dbPath);
       const sql =
         containerTag === ""
@@ -258,7 +276,7 @@ export class SqliteRecordStore implements RecordStore, Migratable {
     kind: "content" | "tags"
   ): AsyncIterable<{ id: string; vector: Float32Array }> {
     const column = kind === "tags" ? "tags_vector" : "vector";
-    const shards = this.shardManager.getAllShards(scope.scope, scope.scopeHash);
+    const shards = this.shardManager.getAllShards(toLegacyShardScope(scope.scope), scope.scopeHash);
     return (async function* () {
       for (const shard of shards) {
         const db = connectionManager.getConnection(shard.dbPath);
@@ -279,6 +297,8 @@ export class SqliteRecordStore implements RecordStore, Migratable {
     db.prepare("UPDATE memories SET is_pinned = ? WHERE id = ?").run(pinned ? 1 : 0, id);
   }
 
+  // Legacy scope enumeration kept for back-compat with old data shapes.
+  // New callers should use list-by-prefix or scope-array reads instead.
   async listScopes(scopeKind: "user" | "project"): Promise<ScopeKey[]> {
     const shards = this.shardManager.getAllShards(scopeKind, "");
     const seen = new Set<string>();
@@ -311,7 +331,10 @@ export class SqliteRecordStore implements RecordStore, Migratable {
 
   // Returns the shard that owns `id`, if any.
   private findShardForId(scope: ScopeKey, id: string) {
-    for (const shard of this.shardManager.getAllShards(scope.scope, scope.scopeHash)) {
+    for (const shard of this.shardManager.getAllShards(
+      toLegacyShardScope(scope.scope),
+      scope.scopeHash
+    )) {
       const db = connectionManager.getConnection(shard.dbPath);
       const r = db.prepare("SELECT 1 AS x FROM memories WHERE id = ?").get(id);
       if (r) return shard;

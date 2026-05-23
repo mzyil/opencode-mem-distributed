@@ -21,7 +21,7 @@ export interface DimensionMismatch {
     storedDimensions: number;
     storedModel: string;
     vectorCount: number;
-    scope: "user" | "project";
+    scope: string;
     scopeHash: string;
   }>;
 }
@@ -74,9 +74,7 @@ export class MigrationService {
         const storedModel = metadata.embedding_model || "unknown";
 
         if (storedDimensions !== CONFIG.embeddingDimensions) {
-          const countRow: any = db
-            .prepare(`SELECT COUNT(*) AS c FROM memories`)
-            .get();
+          const countRow: any = db.prepare(`SELECT COUNT(*) AS c FROM memories`).get();
           const vectorCount = countRow?.c ?? 0;
 
           mismatches.push({
@@ -232,9 +230,7 @@ export class MigrationService {
         // scope and we only want to migrate this one shard's rows
         // before deleting it.
         const db = connectionManager.getConnection(shardInfo.dbPath);
-        const rawRows = db
-          .prepare(`SELECT * FROM memories`)
-          .all() as any[];
+        const rawRows = db.prepare(`SELECT * FROM memories`).all() as any[];
 
         type TempMemory = {
           id: string;
@@ -262,7 +258,11 @@ export class MigrationService {
           updatedAt: row.updated_at,
           metadata: row.metadata
             ? (() => {
-                try { return JSON.parse(row.metadata); } catch { return null; }
+                try {
+                  return JSON.parse(row.metadata);
+                } catch {
+                  return null;
+                }
               })()
             : null,
           displayName: row.display_name ?? null,
@@ -271,7 +271,12 @@ export class MigrationService {
           projectPath: row.project_path ?? null,
           projectName: row.project_name ?? null,
           gitRepoUrl: row.git_repo_url ?? null,
-          tags: row.tags ? String(row.tags).split(",").map((t: string) => t.trim()).filter((t: string) => t) : null,
+          tags: row.tags
+            ? String(row.tags)
+                .split(",")
+                .map((t: string) => t.trim())
+                .filter((t: string) => t)
+            : null,
           isPinned: row.is_pinned === 1,
         }));
 
@@ -283,9 +288,10 @@ export class MigrationService {
         for (const memory of tempMemories) {
           try {
             const vector = await embeddingService.embedWithTimeout(memory.content);
-            const tagsVector = memory.tags && memory.tags.length > 0
-              ? await embeddingService.embedWithTimeout(memory.tags.join(", "))
-              : null;
+            const tagsVector =
+              memory.tags && memory.tags.length > 0
+                ? await embeddingService.embedWithTimeout(memory.tags.join(", "))
+                : null;
 
             const row: MemoryRow = {
               id: memory.id,
