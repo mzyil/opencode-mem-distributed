@@ -16,7 +16,32 @@ import { isConfigured, CONFIG, initConfig } from "./config.js";
 import { log } from "./services/logger.js";
 import type { MemoryType } from "./types/index.js";
 import { getLanguageName } from "./services/language-detector.js";
-import type { MemoryScope } from "./services/client.js";
+// ---------------------------------------------------------------------------
+// Scope normalizers (module scope — project lint rule disallows nested fns)
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalize a raw write-scope label.
+ * Back-compat: old enum strings "project" and "all-projects" are valid free-form
+ * labels and pass through unchanged so existing rows remain queryable.
+ */
+function normalizeWriteScope(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  return raw;
+}
+
+/**
+ * Derive the canonical read-scopes array from the tool args.
+ * Prefers `args.scopes` (the new multi-scope field); falls back to wrapping
+ * `args.scope` in a single-element array for back-compat.
+ */
+function normalizeReadScopes(args: { scope?: string; scopes?: string[] }): string[] | undefined {
+  if (args.scopes?.length) return args.scopes;
+  if (args.scope) return [args.scope]; // single-scope back-compat for read paths
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
 
 export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
   const { directory } = ctx;
@@ -261,7 +286,10 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
           type: tool.schema.string().optional(),
           memoryId: tool.schema.string().optional(),
           limit: tool.schema.number().optional(),
-          scope: tool.schema.enum(["project", "all-projects"]).optional(),
+          // Write scope: a single free-form label string.
+          scope: tool.schema.string().optional(),
+          // Read scopes: an array of free-form labels (read paths only).
+          scopes: tool.schema.array(tool.schema.string()).optional(),
         },
         async execute(
           args: {
@@ -272,7 +300,10 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
             type?: MemoryType;
             memoryId?: string;
             limit?: number;
-            scope?: MemoryScope;
+            // Write paths use a single scope label.
+            scope?: string;
+            // Read paths accept multiple scopes for OR-style filtering.
+            scopes?: string[];
           },
           toolCtx: { sessionID: string }
         ) {
@@ -330,16 +361,22 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
                 const parsedTags = args.tags
                   ? args.tags.split(",").map((t) => t.trim().toLowerCase())
                   : undefined;
-                const result = await memoryClient.addMemory(sanitizedContent, tagInfo.tag, {
-                  type: args.type,
-                  tags: parsedTags,
-                  displayName: tagInfo.displayName,
-                  userName: tagInfo.userName,
-                  userEmail: tagInfo.userEmail,
-                  projectPath: tagInfo.projectPath,
-                  projectName: tagInfo.projectName,
-                  gitRepoUrl: tagInfo.gitRepoUrl,
-                });
+                const writeScope = normalizeWriteScope(args.scope) ?? CONFIG.memory.defaultScope;
+                const result = await memoryClient.addMemory(
+                  sanitizedContent,
+                  tagInfo.tag,
+                  {
+                    type: args.type,
+                    tags: parsedTags,
+                    displayName: tagInfo.displayName,
+                    userName: tagInfo.userName,
+                    userEmail: tagInfo.userEmail,
+                    projectPath: tagInfo.projectPath,
+                    projectName: tagInfo.projectName,
+                    gitRepoUrl: tagInfo.gitRepoUrl,
+                  },
+                  writeScope
+                );
                 return JSON.stringify({
                   success: result.success,
                   message: `Memory added`,
@@ -349,10 +386,13 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
 
               case "search":
                 if (!args.query) return JSON.stringify({ success: false, error: "query required" });
+                const readScopes = normalizeReadScopes(args) ?? [
+                  CONFIG.memory.defaultScope ?? "project",
+                ];
                 const searchRes = await memoryClient.searchMemories(
                   args.query,
                   tags.project.tag,
-                  args.scope ?? CONFIG.memory.defaultScope
+                  readScopes
                 );
                 if (!searchRes.success)
                   return JSON.stringify({ success: false, error: searchRes.error });
@@ -451,10 +491,13 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
               }
 
               case "list":
+                const listReadScopes = normalizeReadScopes(args) ?? [
+                  CONFIG.memory.defaultScope ?? "project",
+                ];
                 const listRes = await memoryClient.listMemories(
                   tags.project.tag,
                   args.limit || 20,
-                  args.scope ?? CONFIG.memory.defaultScope
+                  listReadScopes
                 );
                 if (!listRes.success)
                   return JSON.stringify({ success: false, error: listRes.error });
