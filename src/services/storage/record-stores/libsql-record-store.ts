@@ -117,12 +117,9 @@ export class LibsqlRecordStore implements RecordStore {
     return r ? rowFromDb(r, "vector_bytes", "tags_vector_bytes") : null;
   }
 
-  async list(scope: ScopeKey, opts: ListOptions): Promise<MemoryRow[]> {
-    let q = this.db
-      .selectFrom("memories")
-      .selectAll()
-      .where("scope", "=", scope.scope)
-      .where("scope_hash", "=", scope.scopeHash);
+  async list(scopes: string[], opts: ListOptions): Promise<MemoryRow[]> {
+    if (!scopes || scopes.length === 0) return [];
+    let q = this.db.selectFrom("memories").selectAll().where("scope", "in", scopes);
     if (opts.sessionId) {
       q = q.where("session_id", "=", opts.sessionId);
     } else if (opts.containerTag) {
@@ -134,28 +131,29 @@ export class LibsqlRecordStore implements RecordStore {
     return rows.map((r) => rowFromDb(r, "vector_bytes", "tags_vector_bytes"));
   }
 
-  async countByContainer(scope: ScopeKey, containerTag: string): Promise<number> {
+  async countByContainer(scopes: string[], containerTag: string): Promise<number> {
+    if (!scopes || scopes.length === 0) return 0;
     const r = await this.db
       .selectFrom("memories")
       .select(({ fn }) => [fn.countAll<number>().as("c")])
-      .where("scope", "=", scope.scope)
-      .where("scope_hash", "=", scope.scopeHash)
+      .where("scope", "in", scopes)
       .where("container_tag", "=", containerTag)
       .executeTakeFirst();
     return Number(r?.c ?? 0);
   }
 
-  async countAll(scope: ScopeKey): Promise<number> {
+  async countAll(scopes: string[]): Promise<number> {
+    if (!scopes || scopes.length === 0) return 0;
     const r = await this.db
       .selectFrom("memories")
       .select(({ fn }) => [fn.countAll<number>().as("c")])
-      .where("scope", "=", scope.scope)
-      .where("scope_hash", "=", scope.scopeHash)
+      .where("scope", "in", scopes)
       .executeTakeFirst();
     return Number(r?.c ?? 0);
   }
 
-  async distinctTags(scope: ScopeKey): Promise<TagsRow[]> {
+  async distinctTags(scopes: string[]): Promise<TagsRow[]> {
+    if (!scopes || scopes.length === 0) return [];
     const rows = await this.db
       .selectFrom("memories")
       .select([
@@ -167,8 +165,7 @@ export class LibsqlRecordStore implements RecordStore {
         "project_name",
         "git_repo_url",
       ])
-      .where("scope", "=", scope.scope)
-      .where("scope_hash", "=", scope.scopeHash)
+      .where("scope", "in", scopes)
       .distinct()
       .execute();
     return rows.map((r) => ({
@@ -182,17 +179,27 @@ export class LibsqlRecordStore implements RecordStore {
     }));
   }
 
-  async getByIds(scope: ScopeKey, ids: string[], containerTag: string): Promise<MemoryRow[]> {
-    if (ids.length === 0) return [];
+  async getByIds(scopes: string[], ids: string[], containerTag: string): Promise<MemoryRow[]> {
+    if (ids.length === 0 || !scopes || scopes.length === 0) return [];
     let q = this.db
       .selectFrom("memories")
       .selectAll()
-      .where("scope", "=", scope.scope)
-      .where("scope_hash", "=", scope.scopeHash)
+      .where("scope", "in", scopes)
       .where("id", "in", ids);
     if (containerTag !== "") q = q.where("container_tag", "=", containerTag);
     const rows = await q.execute();
     return rows.map((r) => rowFromDb(r, "vector_bytes", "tags_vector_bytes"));
+  }
+
+  async lookupScopeKeys(scopes: string[]): Promise<ScopeKey[]> {
+    if (!scopes || scopes.length === 0) return [];
+    const rows = await this.db
+      .selectFrom("memories")
+      .select(["scope", "scope_hash"])
+      .where("scope", "in", scopes)
+      .distinct()
+      .execute();
+    return rows.map((r) => ({ scope: r.scope as string, scopeHash: r.scope_hash as string }));
   }
 
   iterateVectors(
@@ -229,6 +236,8 @@ export class LibsqlRecordStore implements RecordStore {
       .execute();
   }
 
+  // Legacy scope enumeration kept for back-compat with old data shapes.
+  // New callers should use list-by-prefix or scope-array reads instead.
   async listScopes(kind: "user" | "project"): Promise<ScopeKey[]> {
     const rows = await this.db
       .selectFrom("memories")

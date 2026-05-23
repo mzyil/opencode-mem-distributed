@@ -14,7 +14,9 @@ export interface MigrateOptions {
   vectorBackend: "exact-scan" | "usearch" | "pgvector";
   batchSize: number;
   dryRun: boolean;
-  scope: "all" | "user" | "project";
+  // "all" is the explicit "no filter" sentinel; any other string is a free-form
+  // scope label that must match the row's scope column exactly.
+  scope: "all" | (string & {});
   resume: boolean;
   authToken?: string;
   ssl?: boolean;

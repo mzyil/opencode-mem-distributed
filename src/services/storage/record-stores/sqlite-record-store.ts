@@ -1,6 +1,6 @@
 // src/services/storage/record-stores/sqlite-record-store.ts
 import { connectionManager } from "../../sqlite/connection-manager.js";
-import { ShardManager } from "../../sqlite/shard-manager.js";
+import { toLegacyShardScope, ShardManager } from "../../sqlite/shard-manager.js";
 import type { Migratable, MigratableRow } from "../migratable.js";
 import type { ListOptions, MemoryRow, RecordStore, ScopeKey, TagsRow } from "../types.js";
 
@@ -61,7 +61,7 @@ export class SqliteRecordStore implements RecordStore, Migratable {
   }
 
   async insert(scope: ScopeKey, row: MemoryRow): Promise<void> {
-    const shard = this.shardManager.getWriteShard(scope.scope, scope.scopeHash);
+    const shard = this.shardManager.getWriteShard(toLegacyShardScope(scope.scope), scope.scopeHash);
     const db = connectionManager.getConnection(shard.dbPath);
     db.prepare(
       `INSERT INTO memories (id, content, vector, tags_vector, container_tag, tags, type,
@@ -148,7 +148,10 @@ export class SqliteRecordStore implements RecordStore, Migratable {
   }
 
   async getById(scope: ScopeKey, id: string): Promise<MemoryRow | null> {
-    for (const shard of this.shardManager.getAllShards(scope.scope, scope.scopeHash)) {
+    for (const shard of this.shardManager.getAllShards(
+      toLegacyShardScope(scope.scope),
+      scope.scopeHash
+    )) {
       const db = connectionManager.getConnection(shard.dbPath);
       const row = db.prepare("SELECT * FROM memories WHERE id = ?").get(id);
       if (row) return rowToMemory(row);
@@ -156,99 +159,151 @@ export class SqliteRecordStore implements RecordStore, Migratable {
     return null;
   }
 
-  async list(scope: ScopeKey, opts: ListOptions): Promise<MemoryRow[]> {
+  async list(scopes: string[], opts: ListOptions): Promise<MemoryRow[]> {
+    if (!scopes || scopes.length === 0) return [];
     const out: MemoryRow[] = [];
     const limit = opts.limit ?? 10000;
-    for (const shard of this.shardManager.getAllShards(scope.scope, scope.scopeHash)) {
-      const db = connectionManager.getConnection(shard.dbPath);
-      let stmt: any;
-      let rows: any[];
-      if (opts.sessionId) {
-        stmt = db.prepare(
-          `SELECT * FROM memories WHERE metadata LIKE ? ORDER BY created_at DESC LIMIT ?`
-        );
-        rows = stmt.all(`%"sessionID":"${opts.sessionId}"%`, limit);
-      } else if (!opts.containerTag) {
-        stmt = db.prepare(`SELECT * FROM memories ORDER BY created_at DESC LIMIT ?`);
-        rows = stmt.all(limit);
-      } else {
-        stmt = db.prepare(
-          `SELECT * FROM memories WHERE container_tag = ? ORDER BY created_at DESC LIMIT ?`
-        );
-        rows = stmt.all(opts.containerTag, limit);
+    // Fan out across each scope, deduplicating shard paths to avoid double-counting
+    // when multiple scope strings map to the same legacy shard tree.
+    const visitedPaths = new Set<string>();
+    for (const scope of scopes) {
+      for (const shard of this.shardManager.getAllShards(toLegacyShardScope(scope), "")) {
+        if (visitedPaths.has(shard.dbPath)) continue;
+        visitedPaths.add(shard.dbPath);
+        const db = connectionManager.getConnection(shard.dbPath);
+        let stmt: any;
+        let rows: any[];
+        if (opts.sessionId) {
+          stmt = db.prepare(
+            `SELECT * FROM memories WHERE metadata LIKE ? ORDER BY created_at DESC LIMIT ?`
+          );
+          rows = stmt.all(`%"sessionID":"${opts.sessionId}"%`, limit);
+        } else if (!opts.containerTag) {
+          stmt = db.prepare(`SELECT * FROM memories ORDER BY created_at DESC LIMIT ?`);
+          rows = stmt.all(limit);
+        } else {
+          stmt = db.prepare(
+            `SELECT * FROM memories WHERE container_tag = ? ORDER BY created_at DESC LIMIT ?`
+          );
+          rows = stmt.all(opts.containerTag, limit);
+        }
+        for (const r of rows) out.push(rowToMemory(r));
+        if (out.length >= limit) break;
       }
-      for (const r of rows) out.push(rowToMemory(r));
-      if (out.length >= limit) break;
     }
+    out.sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
     return out.slice(0, limit);
   }
 
-  async countByContainer(scope: ScopeKey, containerTag: string): Promise<number> {
+  async countByContainer(scopes: string[], containerTag: string): Promise<number> {
+    if (!scopes || scopes.length === 0) return 0;
     let total = 0;
-    for (const shard of this.shardManager.getAllShards(scope.scope, scope.scopeHash)) {
-      const db = connectionManager.getConnection(shard.dbPath);
-      const r: any = db
-        .prepare("SELECT COUNT(*) AS c FROM memories WHERE container_tag = ?")
-        .get(containerTag);
-      total += r.c;
+    const visitedPaths = new Set<string>();
+    for (const scope of scopes) {
+      for (const shard of this.shardManager.getAllShards(toLegacyShardScope(scope), "")) {
+        if (visitedPaths.has(shard.dbPath)) continue;
+        visitedPaths.add(shard.dbPath);
+        const db = connectionManager.getConnection(shard.dbPath);
+        const r: any = db
+          .prepare("SELECT COUNT(*) AS c FROM memories WHERE container_tag = ?")
+          .get(containerTag);
+        total += r.c;
+      }
     }
     return total;
   }
 
-  async countAll(scope: ScopeKey): Promise<number> {
+  async countAll(scopes: string[]): Promise<number> {
+    if (!scopes || scopes.length === 0) return 0;
     let total = 0;
-    for (const shard of this.shardManager.getAllShards(scope.scope, scope.scopeHash)) {
-      const db = connectionManager.getConnection(shard.dbPath);
-      const r: any = db.prepare("SELECT COUNT(*) AS c FROM memories").get();
-      total += r.c;
+    const visitedPaths = new Set<string>();
+    for (const scope of scopes) {
+      for (const shard of this.shardManager.getAllShards(toLegacyShardScope(scope), "")) {
+        if (visitedPaths.has(shard.dbPath)) continue;
+        visitedPaths.add(shard.dbPath);
+        const db = connectionManager.getConnection(shard.dbPath);
+        const r: any = db.prepare("SELECT COUNT(*) AS c FROM memories").get();
+        total += r.c;
+      }
     }
     return total;
   }
 
-  async distinctTags(scope: ScopeKey): Promise<TagsRow[]> {
+  async distinctTags(scopes: string[]): Promise<TagsRow[]> {
+    if (!scopes || scopes.length === 0) return [];
     const seen = new Set<string>();
     const out: TagsRow[] = [];
-    for (const shard of this.shardManager.getAllShards(scope.scope, scope.scopeHash)) {
-      const db = connectionManager.getConnection(shard.dbPath);
-      const rows: any[] = db
-        .prepare(
-          `SELECT DISTINCT container_tag, display_name, user_name, user_email,
-          project_path, project_name, git_repo_url FROM memories`
-        )
-        .all();
-      for (const r of rows) {
-        const k = JSON.stringify(r);
-        if (seen.has(k)) continue;
-        seen.add(k);
-        out.push({
-          containerTag: r.container_tag,
-          displayName: r.display_name ?? null,
-          userName: r.user_name ?? null,
-          userEmail: r.user_email ?? null,
-          projectPath: r.project_path ?? null,
-          projectName: r.project_name ?? null,
-          gitRepoUrl: r.git_repo_url ?? null,
-        });
+    const visitedPaths = new Set<string>();
+    for (const scope of scopes) {
+      for (const shard of this.shardManager.getAllShards(toLegacyShardScope(scope), "")) {
+        if (visitedPaths.has(shard.dbPath)) continue;
+        visitedPaths.add(shard.dbPath);
+        const db = connectionManager.getConnection(shard.dbPath);
+        const rows: any[] = db
+          .prepare(
+            `SELECT DISTINCT container_tag, display_name, user_name, user_email,
+            project_path, project_name, git_repo_url FROM memories`
+          )
+          .all();
+        for (const r of rows) {
+          const k = JSON.stringify(r);
+          if (seen.has(k)) continue;
+          seen.add(k);
+          out.push({
+            containerTag: r.container_tag,
+            displayName: r.display_name ?? null,
+            userName: r.user_name ?? null,
+            userEmail: r.user_email ?? null,
+            projectPath: r.project_path ?? null,
+            projectName: r.project_name ?? null,
+            gitRepoUrl: r.git_repo_url ?? null,
+          });
+        }
       }
     }
     return out;
   }
 
-  async getByIds(scope: ScopeKey, ids: string[], containerTag: string): Promise<MemoryRow[]> {
-    if (ids.length === 0) return [];
+  async getByIds(scopes: string[], ids: string[], containerTag: string): Promise<MemoryRow[]> {
+    if (ids.length === 0 || !scopes || scopes.length === 0) return [];
     const placeholders = ids.map(() => "?").join(",");
     const out: MemoryRow[] = [];
-    for (const shard of this.shardManager.getAllShards(scope.scope, scope.scopeHash)) {
-      const db = connectionManager.getConnection(shard.dbPath);
-      const sql =
-        containerTag === ""
-          ? `SELECT * FROM memories WHERE id IN (${placeholders})`
-          : `SELECT * FROM memories WHERE id IN (${placeholders}) AND container_tag = ?`;
-      const rows: any[] =
-        containerTag === ""
-          ? db.prepare(sql).all(...ids)
-          : db.prepare(sql).all(...ids, containerTag);
-      for (const r of rows) out.push(rowToMemory(r));
+    const visitedPaths = new Set<string>();
+    const seenIds = new Set<string>();
+    for (const scope of scopes) {
+      for (const shard of this.shardManager.getAllShards(toLegacyShardScope(scope), "")) {
+        if (visitedPaths.has(shard.dbPath)) continue;
+        visitedPaths.add(shard.dbPath);
+        const db = connectionManager.getConnection(shard.dbPath);
+        const sqlStr =
+          containerTag === ""
+            ? `SELECT * FROM memories WHERE id IN (${placeholders})`
+            : `SELECT * FROM memories WHERE id IN (${placeholders}) AND container_tag = ?`;
+        const rows: any[] =
+          containerTag === ""
+            ? db.prepare(sqlStr).all(...ids)
+            : db.prepare(sqlStr).all(...ids, containerTag);
+        for (const r of rows) {
+          if (seenIds.has(r.id)) continue;
+          seenIds.add(r.id);
+          out.push(rowToMemory(r));
+        }
+      }
+    }
+    return out;
+  }
+
+  async lookupScopeKeys(scopes: string[]): Promise<ScopeKey[]> {
+    if (!scopes || scopes.length === 0) return [];
+    const out: ScopeKey[] = [];
+    const seen = new Set<string>();
+    for (const scope of scopes) {
+      for (const shard of this.shardManager.getAllShards(toLegacyShardScope(scope), "")) {
+        const key = `${scope}:${shard.scopeHash}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ scope, scopeHash: shard.scopeHash });
+      }
     }
     return out;
   }
@@ -258,7 +313,7 @@ export class SqliteRecordStore implements RecordStore, Migratable {
     kind: "content" | "tags"
   ): AsyncIterable<{ id: string; vector: Float32Array }> {
     const column = kind === "tags" ? "tags_vector" : "vector";
-    const shards = this.shardManager.getAllShards(scope.scope, scope.scopeHash);
+    const shards = this.shardManager.getAllShards(toLegacyShardScope(scope.scope), scope.scopeHash);
     return (async function* () {
       for (const shard of shards) {
         const db = connectionManager.getConnection(shard.dbPath);
@@ -279,6 +334,8 @@ export class SqliteRecordStore implements RecordStore, Migratable {
     db.prepare("UPDATE memories SET is_pinned = ? WHERE id = ?").run(pinned ? 1 : 0, id);
   }
 
+  // Legacy scope enumeration kept for back-compat with old data shapes.
+  // New callers should use list-by-prefix or scope-array reads instead.
   async listScopes(scopeKind: "user" | "project"): Promise<ScopeKey[]> {
     const shards = this.shardManager.getAllShards(scopeKind, "");
     const seen = new Set<string>();
@@ -311,7 +368,10 @@ export class SqliteRecordStore implements RecordStore, Migratable {
 
   // Returns the shard that owns `id`, if any.
   private findShardForId(scope: ScopeKey, id: string) {
-    for (const shard of this.shardManager.getAllShards(scope.scope, scope.scopeHash)) {
+    for (const shard of this.shardManager.getAllShards(
+      toLegacyShardScope(scope.scope),
+      scope.scopeHash
+    )) {
       const db = connectionManager.getConnection(shard.dbPath);
       const r = db.prepare("SELECT 1 AS x FROM memories WHERE id = ?").get(id);
       if (r) return shard;

@@ -11,12 +11,73 @@ import { performUserProfileLearning } from "./services/user-memory-learning.js";
 import { userPromptManager } from "./services/user-prompt/user-prompt-manager.js";
 import { startWebServer, WebServer } from "./services/web-server.js";
 import { getMemoryStore, resetMemoryStore } from "./services/storage/index.js";
+import { sessionContextStore } from "./services/session-context.js";
 
 import { isConfigured, CONFIG, initConfig } from "./config.js";
 import { log } from "./services/logger.js";
 import type { MemoryType } from "./types/index.js";
 import { getLanguageName } from "./services/language-detector.js";
-import type { MemoryScope } from "./services/client.js";
+// ---------------------------------------------------------------------------
+// Scope normalizers (module scope — project lint rule disallows nested fns)
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalize a raw write-scope label.
+ * Back-compat: old enum strings "project" and "all-projects" are valid free-form
+ * labels and pass through unchanged so existing rows remain queryable.
+ */
+function normalizeWriteScope(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  return raw;
+}
+
+/**
+ * Derive the canonical read-scopes array from the tool args.
+ * Prefers `args.scopes` (the new multi-scope field); falls back to wrapping
+ * `args.scope` in a single-element array for back-compat.
+ */
+function normalizeReadScopes(args: { scope?: string; scopes?: string[] }): string[] | undefined {
+  if (args.scopes?.length) return args.scopes;
+  if (args.scope) return [args.scope]; // single-scope back-compat for read paths
+  return undefined;
+}
+
+/**
+ * Resolve the effective read-scopes for a tool call.
+ * Resolution order:
+ *   1. Explicit scope/scopes arg on the tool call
+ *   2. Session default (from the [opencode-mem] directive)
+ *   3. Static defaultScope from config
+ */
+function resolveReadScopes(
+  args: { scope?: string; scopes?: string[] },
+  sessionId: string | undefined
+): string[] {
+  const explicit = normalizeReadScopes(args);
+  if (explicit) return explicit;
+  const sessionDefault = sessionId
+    ? sessionContextStore.get(sessionId)?.default_read_scopes
+    : undefined;
+  if (sessionDefault?.length) return sessionDefault;
+  return [CONFIG.memory.defaultScope];
+}
+
+/**
+ * Resolve the effective write-scope for a tool call.
+ * Resolution order:
+ *   1. Explicit scope arg on the tool call
+ *   2. Session default (from the [opencode-mem] directive)
+ *   3. Static defaultScope from config
+ */
+function resolveWriteScope(args: { scope?: string }, sessionId: string | undefined): string {
+  if (args.scope) return args.scope;
+  const sessionDefault = sessionId
+    ? sessionContextStore.get(sessionId)?.default_write_scope
+    : undefined;
+  return sessionDefault ?? CONFIG.memory.defaultScope;
+}
+
+// ---------------------------------------------------------------------------
 
 export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
   const { directory } = ctx;
@@ -261,7 +322,10 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
           type: tool.schema.string().optional(),
           memoryId: tool.schema.string().optional(),
           limit: tool.schema.number().optional(),
-          scope: tool.schema.enum(["project", "all-projects"]).optional(),
+          // Write scope: a single free-form label string.
+          scope: tool.schema.string().optional(),
+          // Read scopes: an array of free-form labels (read paths only).
+          scopes: tool.schema.array(tool.schema.string()).optional(),
         },
         async execute(
           args: {
@@ -272,7 +336,10 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
             type?: MemoryType;
             memoryId?: string;
             limit?: number;
-            scope?: MemoryScope;
+            // Write paths use a single scope label.
+            scope?: string;
+            // Read paths accept multiple scopes for OR-style filtering.
+            scopes?: string[];
           },
           toolCtx: { sessionID: string }
         ) {
@@ -330,16 +397,22 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
                 const parsedTags = args.tags
                   ? args.tags.split(",").map((t) => t.trim().toLowerCase())
                   : undefined;
-                const result = await memoryClient.addMemory(sanitizedContent, tagInfo.tag, {
-                  type: args.type,
-                  tags: parsedTags,
-                  displayName: tagInfo.displayName,
-                  userName: tagInfo.userName,
-                  userEmail: tagInfo.userEmail,
-                  projectPath: tagInfo.projectPath,
-                  projectName: tagInfo.projectName,
-                  gitRepoUrl: tagInfo.gitRepoUrl,
-                });
+                const writeScope = normalizeWriteScope(resolveWriteScope(args, toolCtx.sessionID));
+                const result = await memoryClient.addMemory(
+                  sanitizedContent,
+                  tagInfo.tag,
+                  {
+                    type: args.type,
+                    tags: parsedTags,
+                    displayName: tagInfo.displayName,
+                    userName: tagInfo.userName,
+                    userEmail: tagInfo.userEmail,
+                    projectPath: tagInfo.projectPath,
+                    projectName: tagInfo.projectName,
+                    gitRepoUrl: tagInfo.gitRepoUrl,
+                  },
+                  writeScope
+                );
                 return JSON.stringify({
                   success: result.success,
                   message: `Memory added`,
@@ -349,10 +422,11 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
 
               case "search":
                 if (!args.query) return JSON.stringify({ success: false, error: "query required" });
+                const readScopes = resolveReadScopes(args, toolCtx.sessionID);
                 const searchRes = await memoryClient.searchMemories(
                   args.query,
                   tags.project.tag,
-                  args.scope ?? CONFIG.memory.defaultScope
+                  readScopes
                 );
                 if (!searchRes.success)
                   return JSON.stringify({ success: false, error: searchRes.error });
@@ -451,10 +525,11 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
               }
 
               case "list":
+                const listReadScopes = resolveReadScopes(args, toolCtx.sessionID);
                 const listRes = await memoryClient.listMemories(
                   tags.project.tag,
                   args.limit || 20,
-                  args.scope ?? CONFIG.memory.defaultScope
+                  listReadScopes
                 );
                 if (!listRes.success)
                   return JSON.stringify({ success: false, error: listRes.error });
@@ -562,6 +637,38 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
           log("Compaction handler error", { error: String(error) });
         }
       }
+    },
+
+    // Parse the [opencode-mem] … [/opencode-mem] directive out of the first
+    // system prompt element for this session.  The directive is stripped in
+    // place so the LLM never sees the plumbing detail.
+    //
+    // Hook choice: `experimental.chat.system.transform` is the only hook in
+    // the @opencode-ai/plugin API that receives both sessionID and the mutable
+    // system prompt array.  There is no onSessionStart / onSessionEnd in the
+    // current API, so we use FIFO eviction (MAX_SESSIONS = 10_000) inside
+    // SessionContextStore instead of explicit cleanup.
+    "experimental.chat.system.transform": async (
+      input: { sessionID?: string; model: any },
+      output: { system: string[] }
+    ) => {
+      const sessionId = input.sessionID;
+      if (!sessionId) return;
+      // Gate on parsed-attempt, not on defaults-found — otherwise no-directive sessions re-parse on every request.
+      if (sessionContextStore.hasParsed(sessionId)) return;
+
+      for (let i = 0; i < output.system.length; i++) {
+        const entry = output.system[i];
+        if (entry === undefined) continue;
+        const { stripped, defaults } = sessionContextStore.parseAndStrip(entry);
+        if (defaults) {
+          sessionContextStore.register(sessionId, defaults);
+          output.system[i] = stripped;
+          log("session-context: directive parsed", { sessionId, domain: defaults.domain });
+          break; // Only process the first occurrence.
+        }
+      }
+      sessionContextStore.markParsed(sessionId);
     },
   };
 };

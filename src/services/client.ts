@@ -5,7 +5,7 @@ import { CONFIG } from "../config.js";
 import { log } from "./logger.js";
 import type { MemoryType } from "../types/index.js";
 
-export type MemoryScope = "project" | "all-projects";
+export type MemoryScope = string;
 
 function safeToISOString(timestamp: any): string {
   try {
@@ -25,26 +25,16 @@ function safeToISOString(timestamp: any): string {
 }
 
 function extractScopeFromContainerTag(containerTag: string): {
-  scope: "user" | "project";
+  scope: string;
   hash: string;
 } {
   const parts = containerTag.split("_");
   if (parts.length >= 3) {
-    const scope = parts[1] as "user" | "project";
+    const scope = parts[1]!;
     const hash = parts.slice(2).join("_");
     return { scope, hash };
   }
   return { scope: "user", hash: containerTag };
-}
-
-function resolveScopeKey(
-  scope: MemoryScope,
-  containerTag: string
-): { scope: "user" | "project"; hash: string } {
-  if (scope === "all-projects") {
-    return { scope: "project", hash: "" };
-  }
-  return extractScopeFromContainerTag(containerTag);
 }
 
 export class LocalMemoryClient {
@@ -98,48 +88,33 @@ export class LocalMemoryClient {
     // Avoid re-instantiating the singleton during shutdown.
   }
 
-  async searchMemories(query: string, containerTag: string, scope: MemoryScope = "project") {
+  async searchMemories(query: string, containerTag: string, scopes: string[]) {
     try {
       await this.initialize();
 
+      const effectiveScopes: string[] = scopes.length > 0 ? scopes : [CONFIG.memory.defaultScope];
       const queryVector = await embeddingService.embedWithTimeout(query);
-      const resolved = resolveScopeKey(scope, containerTag);
-      const scopeKey: ScopeKey = { scope: resolved.scope, scopeHash: resolved.hash };
       const store = await getMemoryStore();
 
-      const targetContainerTag = scope === "all-projects" ? "" : containerTag;
-
-      // When the resolved hash is empty we span every project; otherwise
-      // it's a single hashed scope. MemoryStore.search is scope-local,
-      // so for cross-project search we have to fan out.
-      let results;
-      if (scope === "all-projects") {
-        const projectScopes = await store.listScopes("project");
-        const shardResults = await Promise.all(
-          projectScopes.map((sk) =>
-            store.search(
-              sk,
-              queryVector,
-              targetContainerTag,
-              CONFIG.maxMemories,
-              CONFIG.similarityThreshold,
-              query
-            )
-          )
-        );
-        const aggregated = shardResults.flat();
-        aggregated.sort((a, b) => b.similarity - a.similarity);
-        results = aggregated.slice(0, CONFIG.maxMemories);
+      // "all-projects" expands to every known project scope string.
+      let resolvedScopes: string[];
+      if (effectiveScopes.includes("all-projects")) {
+        const projectScopeKeys = await store.listScopes("project");
+        resolvedScopes = projectScopeKeys.map((sk) => sk.scope);
       } else {
-        results = await store.search(
-          scopeKey,
-          queryVector,
-          targetContainerTag,
-          CONFIG.maxMemories,
-          CONFIG.similarityThreshold,
-          query
-        );
+        resolvedScopes = effectiveScopes;
       }
+
+      const targetContainerTag = effectiveScopes.includes("all-projects") ? "" : containerTag;
+
+      const results = await store.search(
+        resolvedScopes,
+        queryVector,
+        targetContainerTag,
+        CONFIG.maxMemories,
+        CONFIG.similarityThreshold,
+        query
+      );
 
       return { success: true as const, results, total: results.length, timing: 0 };
     } catch (error) {
@@ -167,7 +142,8 @@ export class LocalMemoryClient {
       projectName?: string;
       gitRepoUrl?: string;
       [key: string]: unknown;
-    }
+    },
+    scope?: string
   ) {
     try {
       await this.initialize();
@@ -180,8 +156,10 @@ export class LocalMemoryClient {
         tagsVector = await embeddingService.embedWithTimeout(tags.join(", "));
       }
 
-      const { scope, hash } = extractScopeFromContainerTag(containerTag);
-      const scopeKey: ScopeKey = { scope, scopeHash: hash };
+      const derived = extractScopeFromContainerTag(containerTag);
+      const scopeKey: ScopeKey = scope
+        ? { scope, scopeHash: derived.hash }
+        : { scope: derived.scope, scopeHash: derived.hash };
 
       const id = `mem_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
       const now = Date.now();
@@ -253,26 +231,28 @@ export class LocalMemoryClient {
     }
   }
 
-  async listMemories(containerTag: string, limit = 20, scope: MemoryScope = "project") {
+  async listMemories(containerTag: string, limit = 20, scopes: string[] = ["project"]) {
     try {
       await this.initialize();
 
-      const resolved = resolveScopeKey(scope, containerTag);
+      const effectiveScopes: string[] = scopes.length > 0 ? scopes : [CONFIG.memory.defaultScope];
       const store = await getMemoryStore();
 
-      const targetContainerTag = scope === "all-projects" ? "" : containerTag;
-
-      let allMemories: MemoryRow[] = [];
-      if (scope === "all-projects") {
-        const projectScopes = await store.listScopes("project");
-        for (const sk of projectScopes) {
-          const rows = await store.list(sk, { containerTag: targetContainerTag, limit });
-          allMemories.push(...rows);
-        }
+      // "all-projects" expands to every known project scope string.
+      let resolvedScopes: string[];
+      if (effectiveScopes.includes("all-projects")) {
+        const projectScopeKeys = await store.listScopes("project");
+        resolvedScopes = projectScopeKeys.map((sk) => sk.scope);
       } else {
-        const scopeKey: ScopeKey = { scope: resolved.scope, scopeHash: resolved.hash };
-        allMemories = await store.list(scopeKey, { containerTag: targetContainerTag, limit });
+        resolvedScopes = effectiveScopes;
       }
+
+      const targetContainerTag = effectiveScopes.includes("all-projects") ? "" : containerTag;
+
+      const allMemories: MemoryRow[] = await store.list(resolvedScopes, {
+        containerTag: targetContainerTag,
+        limit,
+      });
 
       allMemories.sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
 
@@ -310,11 +290,10 @@ export class LocalMemoryClient {
     try {
       await this.initialize();
 
-      const { scope, hash } = extractScopeFromContainerTag(containerTag);
-      const scopeKey: ScopeKey = { scope, scopeHash: hash };
+      const { scope } = extractScopeFromContainerTag(containerTag);
       const store = await getMemoryStore();
 
-      const rows = await store.list(scopeKey, { sessionId: sessionID, limit });
+      const rows = await store.list([scope], { sessionId: sessionID, limit });
 
       rows.sort((a, b) => b.createdAt - a.createdAt);
 

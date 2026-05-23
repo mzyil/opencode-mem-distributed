@@ -75,30 +75,47 @@ export class USearchBackend implements VectorBackend {
   }
 
   async search(args: {
-    ns: NamespaceKey;
+    scopes: string[];
     kind: VectorKind;
     queryVector: Float32Array;
     limit: number;
   }): Promise<BackendSearchResult[]> {
-    const indexKey = this.getIndexKey(args.ns, args.kind);
-    const cache = await this.getOrCreateIndex(indexKey);
-    try {
-      const matches = cache.index.search(args.queryVector, args.limit);
-      return Array.from(matches.keys as Iterable<bigint>, (key, index) => {
-        const id = cache.keyToId.get(key);
-        if (!id) {
-          throw new Error(
-            `USearch index metadata missing for key ${String(key)} in ${cache.indexKey}`
-          );
+    if (!args.scopes || args.scopes.length === 0) return [];
+    // Collect all index keys that match one of the requested scopes.
+    // Key format: "<scope>_<scopeHash>_<shardIndex|main>_<kind>"
+    // NOTE: scope may contain underscores, so split("_")[0] is wrong — use startsWith instead.
+    const matchingKeys: string[] = [];
+    for (const key of this.indexes.keys()) {
+      if (!key.endsWith(`_${args.kind}`)) continue;
+      for (const s of args.scopes) {
+        if (key.startsWith(s + "_")) {
+          matchingKeys.push(key);
+          break;
         }
-        return {
-          id,
-          distance: matches.distances[index] ?? 0,
-        };
-      });
-    } catch (error) {
-      throw new Error(`USearch search failed for ${indexKey}: ${String(error)}`);
+      }
     }
+    if (matchingKeys.length === 0) return [];
+    const allResults: BackendSearchResult[] = [];
+    for (const indexKey of matchingKeys) {
+      const cache = await this.getOrCreateIndex(indexKey);
+      try {
+        const matches = cache.index.search(args.queryVector, args.limit);
+        for (const [i, key] of Array.from(matches.keys as Iterable<bigint>).entries()) {
+          const id = cache.keyToId.get(key);
+          if (!id) {
+            throw new Error(
+              `USearch index metadata missing for key ${String(key)} in ${cache.indexKey}`
+            );
+          }
+          allResults.push({ id, distance: matches.distances[i] ?? 0 });
+        }
+      } catch (error) {
+        throw new Error(`USearch search failed for ${indexKey}: ${String(error)}`);
+      }
+    }
+    // Merge and re-rank across all shards, then cap at limit.
+    allResults.sort((a, b) => a.distance - b.distance);
+    return allResults.slice(0, args.limit);
   }
 
   async rebuildFromSource(args: {

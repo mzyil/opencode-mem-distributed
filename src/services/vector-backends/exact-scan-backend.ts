@@ -64,15 +64,27 @@ export class ExactScanBackend implements VectorBackend {
   }
 
   async search(args: {
-    ns: NamespaceKey;
+    scopes: string[];
     kind: VectorKind;
     queryVector: Float32Array;
     limit: number;
   }): Promise<BackendSearchResult[]> {
-    const key = this.getIndexKey(args.ns, args.kind);
-    const buf = this.vectors.get(key) ?? [];
-    if (buf.length === 0) return [];
-    return this.rankVectors(buf, args.queryVector, args.limit);
+    if (!args.scopes || args.scopes.length === 0) return [];
+    // Collect all vectors whose index key belongs to one of the requested scopes.
+    // Key format: "<scope>_<scopeHash>_<shardIndex|main>_<kind>"
+    // NOTE: scope may contain underscores, so split("_")[0] is wrong — use startsWith instead.
+    const combined: BackendInsertItem[] = [];
+    for (const [key, items] of this.vectors.entries()) {
+      if (!key.endsWith(`_${args.kind}`)) continue;
+      for (const s of args.scopes) {
+        if (key.startsWith(s + "_")) {
+          combined.push(...items);
+          break;
+        }
+      }
+    }
+    if (combined.length === 0) return [];
+    return this.rankVectors(combined, args.queryVector, args.limit);
   }
 
   async rebuildFromSource(args: {

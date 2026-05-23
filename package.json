@@ -25,7 +25,9 @@
     "format": "prettier --write \"src/**/*.{ts,js,css,html}\"",
     "format:check": "prettier --check \"src/**/*.{ts,js,css,html}\"",
     "lint": "eslint src --max-warnings 0",
-    "prepare": "husky"
+    "prepare": "husky",
+    "test": "vitest run",
+    "test:integration": "RUN_PGVECTOR_TESTS=true vitest run tests/pgvector-scope-filter.test.ts"
   },
   "keywords": [
     "opencode",
@@ -65,11 +67,13 @@
     "@types/pg": "^8.20.0",
     "@typescript-eslint/eslint-plugin": "^8.59.4",
     "@typescript-eslint/parser": "^8.59.4",
+    "@vitest/coverage-v8": "^4.1.7",
     "eslint": "^10.4.0",
     "husky": "^9.1.7",
     "lint-staged": "^16.2.7",
     "prettier": "^3.4.2",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "vitest": "^4.1.7"
   },
   "opencode": {
     "type": "plugin",

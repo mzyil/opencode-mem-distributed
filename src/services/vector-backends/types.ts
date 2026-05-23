@@ -1,8 +1,10 @@
 // src/services/vector-backends/types.ts
+import type { Scope } from "../storage/types.js";
+
 export type VectorKind = "content" | "tags";
 
 export interface NamespaceKey {
-  scope: "user" | "project";
+  scope: Scope;
   scopeHash: string;
   shardIndex?: number; // SQLite-only; remote backends ignore
 }
@@ -20,12 +22,21 @@ export interface BackendInsertItem {
 export interface VectorBackend {
   getBackendName(): string;
 
-  insert(args: { id: string; vector: Float32Array; ns: NamespaceKey; kind: VectorKind }): Promise<void>;
-  insertBatch(args: { items: BackendInsertItem[]; ns: NamespaceKey; kind: VectorKind }): Promise<void>;
+  insert(args: {
+    id: string;
+    vector: Float32Array;
+    ns: NamespaceKey;
+    kind: VectorKind;
+  }): Promise<void>;
+  insertBatch(args: {
+    items: BackendInsertItem[];
+    ns: NamespaceKey;
+    kind: VectorKind;
+  }): Promise<void>;
   delete(args: { id: string; ns: NamespaceKey; kind: VectorKind }): Promise<void>;
 
   search(args: {
-    ns: NamespaceKey;
+    scopes: string[];
     kind: VectorKind;
     queryVector: Float32Array;
     limit: number;

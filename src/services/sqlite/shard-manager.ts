@@ -6,6 +6,13 @@ import { connectionManager } from "./connection-manager.js";
 import { log } from "../logger.js";
 import type { ShardInfo } from "./types.js";
 
+// Map a free-form scope label down to the legacy two-shard layout
+// for sqlite filesystem paths. New convention scopes (e.g. "qna:user:U1")
+// collapse to "project". See plan's "Hybrid sharding strategy" section.
+export function toLegacyShardScope(scope: string): "user" | "project" {
+  return scope === "user" ? "user" : "project";
+}
+
 const Database = getDatabase();
 type DatabaseType = typeof Database.prototype;
 

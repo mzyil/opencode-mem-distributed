@@ -52,7 +52,7 @@ export class CleanupService {
       const memoriesByScope = new Map<ScopeKey, MemoryRow[]>();
       const pinnedMemoryIds = new Set<string>();
       for (const scope of allScopes) {
-        const rows = await store.list(scope, {});
+        const rows = await store.list([scope.scope], {});
         memoriesByScope.set(scope, rows);
         for (const r of rows) {
           if (r.isPinned) pinnedMemoryIds.add(r.id);
