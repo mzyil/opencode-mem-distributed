@@ -1,6 +1,6 @@
 {
   "name": "@banxware/opencode-mem-distributed",
-  "version": "3.0.0-rc.0",
+  "version": "3.0.0-rc.2",
   "description": "OpenCode plugin that gives coding agents persistent memory using local vector database",
   "publishConfig": {
     "access": "restricted",

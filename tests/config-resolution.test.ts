@@ -66,4 +66,44 @@ describe("project-scoped config resolution", () => {
     expect(CONFIG.autoCaptureEnabled).toBe(true); // default value
     expect(CONFIG.opencodeProvider).toBeUndefined();
   });
+
+  it("resolves env:// for embeddingApiUrl and memoryApiUrl (regression: was passed through raw)", () => {
+    process.env.TEST_EMBED_URL = "http://embed.example/v1";
+    process.env.TEST_MEMORY_URL = "https://mem.example/v2";
+    try {
+      existsSpy = spyOn(fs, "existsSync").mockReturnValue(true);
+      readSpy = spyOn(fs, "readFileSync").mockReturnValue(
+        JSON.stringify({
+          embeddingApiUrl: "env://TEST_EMBED_URL",
+          memoryApiUrl: "env://TEST_MEMORY_URL",
+        }) as any
+      );
+      initConfig("/some/project");
+      expect(CONFIG.embeddingApiUrl).toBe("http://embed.example/v1");
+      expect(CONFIG.memoryApiUrl).toBe("https://mem.example/v2");
+    } finally {
+      delete process.env.TEST_EMBED_URL;
+      delete process.env.TEST_MEMORY_URL;
+    }
+  });
+
+  it("strips trailing slashes from embeddingApiUrl/memoryApiUrl so callers can append paths", () => {
+    process.env.TEST_EMBED_URL = "http://embed.example/api/v1/";
+    process.env.TEST_MEMORY_URL = "https://mem.example/api/v2///";
+    try {
+      existsSpy = spyOn(fs, "existsSync").mockReturnValue(true);
+      readSpy = spyOn(fs, "readFileSync").mockReturnValue(
+        JSON.stringify({
+          embeddingApiUrl: "env://TEST_EMBED_URL",
+          memoryApiUrl: "env://TEST_MEMORY_URL",
+        }) as any
+      );
+      initConfig("/some/project");
+      expect(CONFIG.embeddingApiUrl).toBe("http://embed.example/api/v1");
+      expect(CONFIG.memoryApiUrl).toBe("https://mem.example/api/v2");
+    } finally {
+      delete process.env.TEST_EMBED_URL;
+      delete process.env.TEST_MEMORY_URL;
+    }
+  });
 });
