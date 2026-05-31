@@ -4,6 +4,13 @@ import { homedir } from "node:os";
 import { stripJsoncComments } from "./services/jsonc.js";
 import { resolveSecretValue } from "./services/secret-resolver.js";
 
+// Resolve env://, file://, or literal, then strip trailing slashes so callers
+// can construct paths as `${url}/embeddings` without producing `//embeddings`.
+function resolveBaseUrl(value: string | undefined): string | undefined {
+  const resolved = resolveSecretValue(value);
+  return resolved ? resolved.replace(/\/+$/, "") : resolved;
+}
+
 const CONFIG_DIR = join(homedir(), ".config", "opencode");
 const DATA_DIR = join(homedir(), ".opencode-mem");
 const CONFIG_FILES = [
@@ -41,6 +48,7 @@ interface OpenCodeMemConfig {
   autoCaptureMaxIterations?: number;
   autoCaptureIterationTimeout?: number;
   autoCaptureLanguage?: string;
+  autoCaptureInstructions?: string;
   memoryProvider?: "openai-chat" | "openai-responses" | "anthropic";
   memoryModel?: string;
   memoryApiUrl?: string;
@@ -102,6 +110,7 @@ const DEFAULTS: Required<
     | "opencodeProvider"
     | "opencodeModel"
     | "autoCaptureLanguage"
+    | "autoCaptureInstructions"
     | "userEmailOverride"
     | "userNameOverride"
     | "storage"
@@ -119,6 +128,7 @@ const DEFAULTS: Required<
   opencodeModel?: string;
   vectorBackend?: "usearch-first" | "usearch" | "exact-scan";
   autoCaptureLanguage?: string;
+  autoCaptureInstructions?: string;
   userEmailOverride?: string;
   userNameOverride?: string;
   memory: {
@@ -508,7 +518,7 @@ function buildConfig(fileConfig: OpenCodeMemConfig) {
     embeddingDimensions:
       fileConfig.embeddingDimensions ??
       getEmbeddingDimensions(fileConfig.embeddingModel ?? DEFAULTS.embeddingModel),
-    embeddingApiUrl: fileConfig.embeddingApiUrl,
+    embeddingApiUrl: resolveBaseUrl(fileConfig.embeddingApiUrl),
     embeddingApiKey: fileConfig.embeddingApiUrl
       ? resolveSecretValue(fileConfig.embeddingApiKey ?? process.env.OPENAI_API_KEY)
       : undefined,
@@ -523,12 +533,13 @@ function buildConfig(fileConfig: OpenCodeMemConfig) {
     autoCaptureIterationTimeout:
       fileConfig.autoCaptureIterationTimeout ?? DEFAULTS.autoCaptureIterationTimeout,
     autoCaptureLanguage: fileConfig.autoCaptureLanguage,
+    autoCaptureInstructions: fileConfig.autoCaptureInstructions,
     memoryProvider: (fileConfig.memoryProvider ?? "openai-chat") as
       | "openai-chat"
       | "openai-responses"
       | "anthropic",
     memoryModel: fileConfig.memoryModel,
-    memoryApiUrl: fileConfig.memoryApiUrl,
+    memoryApiUrl: resolveBaseUrl(fileConfig.memoryApiUrl),
     memoryApiKey: resolveSecretValue(fileConfig.memoryApiKey),
     memoryTemperature: fileConfig.memoryTemperature,
     memoryExtraParams: fileConfig.memoryExtraParams,
