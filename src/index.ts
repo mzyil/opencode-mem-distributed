@@ -11,7 +11,7 @@ import { performUserProfileLearning } from "./services/user-memory-learning.js";
 import { userPromptManager } from "./services/user-prompt/user-prompt-manager.js";
 import { startWebServer, WebServer } from "./services/web-server.js";
 import { getMemoryStore, resetMemoryStore } from "./services/storage/index.js";
-import { sessionContextStore } from "./services/session-context.js";
+import { sessionContextStore, parseMemScopeEnvelope } from "./services/session-context.js";
 
 import { isConfigured, CONFIG, initConfig } from "./config.js";
 import { log } from "./services/logger.js";
@@ -225,6 +225,10 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
         const userMessage = textParts.map((p) => p.text).join("\n");
         if (!userMessage.trim()) return;
 
+        // Per-turn scope defaults arrive in the system envelope; register before injection.
+        const envScope = parseMemScopeEnvelope((output.message as { system?: string }).system);
+        if (envScope) sessionContextStore.register(input.sessionID, envScope);
+
         userPromptManager.savePrompt(input.sessionID, output.message.id, directory, userMessage);
 
         const messagesResponse = await ctx.client.session.messages({
@@ -253,10 +257,10 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
 
         if (!shouldInject) return;
 
-        const listResult = await memoryClient.listMemories(
-          tags.project.tag,
-          CONFIG.chatMessage.maxMemories
-        );
+        const readScopes = sessionContextStore.get(input.sessionID)?.default_read_scopes;
+        const listResult = readScopes?.length
+          ? await memoryClient.listMemories(tags.project.tag, CONFIG.chatMessage.maxMemories, readScopes)
+          : await memoryClient.listMemories(tags.project.tag, CONFIG.chatMessage.maxMemories);
 
         let memories = listResult.success ? listResult.memories : [];
 
