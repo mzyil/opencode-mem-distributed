@@ -46,7 +46,20 @@ export interface StructuredOutputOptions<T> {
   schema: z.ZodType<T>;
   directory?: string;
   retryCount?: number;
+  /**
+   * Agent to run the structured-output prompt under. Must be passed
+   * explicitly: with no agent, opencode resolves the server's *default*
+   * primary agent, which under oh-my-opencode is named with a leading
+   * zero-width space (e.g. "​Sisyphus - Ultraworker"). The default-agent
+   * lookup uses the clean name and fails ("default agent ... not found"),
+   * surfacing as a 500 / missing-`info` error here. Defaults to "general"
+   * (a native opencode agent that is always present).
+   */
+  agent?: string;
 }
+
+/** Native opencode agent; always registered, no oh-my-opencode dependency. */
+const DEFAULT_CAPTURE_AGENT = "general";
 
 /**
  * Generate one structured-output completion via opencode's v2 API.
@@ -55,8 +68,17 @@ export interface StructuredOutputOptions<T> {
  * or final Zod validation failure.
  */
 export async function generateStructuredOutput<T>(opts: StructuredOutputOptions<T>): Promise<T> {
-  const { client, providerID, modelID, systemPrompt, userPrompt, schema, directory, retryCount } =
-    opts;
+  const {
+    client,
+    providerID,
+    modelID,
+    systemPrompt,
+    userPrompt,
+    schema,
+    directory,
+    retryCount,
+    agent = DEFAULT_CAPTURE_AGENT,
+  } = opts;
 
   // zod v4 exposes JSON Schema export natively (instance `.toJSONSchema()`
   // and global `z.toJSONSchema()`); we prefer instance, fall back to global.
@@ -83,6 +105,7 @@ export async function generateStructuredOutput<T>(opts: StructuredOutputOptions<
     const promptResult = await client.session.prompt({
       sessionID,
       ...(directory ? { directory } : {}),
+      agent,
       model: { providerID, modelID },
       system: systemPrompt,
       parts: [{ type: "text", text: userPrompt }],
@@ -91,7 +114,11 @@ export async function generateStructuredOutput<T>(opts: StructuredOutputOptions<
         schema: jsonSchema as Record<string, unknown>,
         ...(retryCount !== undefined ? { retryCount } : {}),
       },
-      noReply: true,
+      // Must be false: with noReply=true, opencode records the user message
+      // but does not run the assistant, so the StructuredOutput tool never
+      // fires and `info.structured` is never populated. The transient session
+      // is deleted in `finally`, so the generated reply is never user-visible.
+      noReply: false,
     });
 
     const data = (

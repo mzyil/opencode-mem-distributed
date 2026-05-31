@@ -1,15 +1,13 @@
 {
   "name": "@banxware/opencode-mem-distributed",
-  "version": "3.0.0-rc.3",
+  "version": "3.0.0-rc.4",
   "description": "OpenCode plugin that gives coding agents persistent memory using local vector database",
   "publishConfig": {
-    "access": "restricted",
-    "registry": "https://banxware-188147191158.d.codeartifact.eu-central-1.amazonaws.com/npm/npm/"
+    "access": "public"
   },
   "files": [
     "dist",
-    "README.md",
-    "LICENSE"
+    "package.json"
   ],
   "type": "module",
   "main": "dist/plugin.js",
@@ -54,9 +52,6 @@
     "type": "git",
     "url": "git+https://github.com/tickernelz/opencode-mem.git"
   },
-  "publishConfig": {
-    "access": "public"
-  },
   "dependencies": {
     "@libsql/client": "^0.17.3",
     "@opencode-ai/plugin": "^1.3.0",
@@ -91,10 +86,6 @@
       "event"
     ]
   },
-  "files": [
-    "dist",
-    "package.json"
-  ],
   "lint-staged": {
     "*.{ts,tsx,js,jsx,css,html,json,md}": [
       "prettier --write"
