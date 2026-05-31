@@ -106,4 +106,19 @@ describe("project-scoped config resolution", () => {
       delete process.env.TEST_MEMORY_URL;
     }
   });
+
+  it("passes through autoCaptureInstructions when set", () => {
+    existsSpy = spyOn(fs, "existsSync").mockReturnValue(true);
+    readSpy = spyOn(fs, "readFileSync").mockReturnValue(
+      JSON.stringify({ autoCaptureInstructions: "capture qna facts" }) as any
+    );
+    initConfig("/some/project");
+    expect(CONFIG.autoCaptureInstructions).toBe("capture qna facts");
+  });
+
+  it("leaves autoCaptureInstructions undefined when absent", () => {
+    existsSpy = spyOn(fs, "existsSync").mockReturnValue(false);
+    initConfig("/no/config/project");
+    expect(CONFIG.autoCaptureInstructions).toBeUndefined();
+  });
 });

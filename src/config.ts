@@ -48,6 +48,7 @@ interface OpenCodeMemConfig {
   autoCaptureMaxIterations?: number;
   autoCaptureIterationTimeout?: number;
   autoCaptureLanguage?: string;
+  autoCaptureInstructions?: string;
   memoryProvider?: "openai-chat" | "openai-responses" | "anthropic";
   memoryModel?: string;
   memoryApiUrl?: string;
@@ -109,6 +110,7 @@ const DEFAULTS: Required<
     | "opencodeProvider"
     | "opencodeModel"
     | "autoCaptureLanguage"
+    | "autoCaptureInstructions"
     | "userEmailOverride"
     | "userNameOverride"
     | "storage"
@@ -126,6 +128,7 @@ const DEFAULTS: Required<
   opencodeModel?: string;
   vectorBackend?: "usearch-first" | "usearch" | "exact-scan";
   autoCaptureLanguage?: string;
+  autoCaptureInstructions?: string;
   userEmailOverride?: string;
   userNameOverride?: string;
   memory: {
@@ -530,6 +533,7 @@ function buildConfig(fileConfig: OpenCodeMemConfig) {
     autoCaptureIterationTimeout:
       fileConfig.autoCaptureIterationTimeout ?? DEFAULTS.autoCaptureIterationTimeout,
     autoCaptureLanguage: fileConfig.autoCaptureLanguage,
+    autoCaptureInstructions: fileConfig.autoCaptureInstructions,
     memoryProvider: (fileConfig.memoryProvider ?? "openai-chat") as
       | "openai-chat"
       | "openai-responses"
