@@ -7,6 +7,31 @@ export interface ScopeDefaults {
   peer_domains?: string[];
 }
 
+/**
+ * Parse a memScope out of the per-prompt `system` JSON envelope emitted by
+ * session-manager-v2: `{ slackContext?, memScope? }`. Returns null if the
+ * string is not JSON, has no memScope, or the memScope is missing required
+ * fields. Never throws.
+ */
+export function parseMemScopeEnvelope(systemMessage: string | undefined): ScopeDefaults | null {
+  if (!systemMessage) return null;
+  try {
+    const obj = JSON.parse(systemMessage) as { memScope?: unknown };
+    const ms = obj?.memScope as Partial<ScopeDefaults> | undefined;
+    if (
+      ms &&
+      typeof ms.domain === "string" &&
+      typeof ms.default_write_scope === "string" &&
+      Array.isArray(ms.default_read_scopes)
+    ) {
+      return ms as ScopeDefaults;
+    }
+  } catch {
+    // not JSON — caller falls back to the legacy text-fence parser
+  }
+  return null;
+}
+
 // Sentinel block format prepended by session-manager-v2:
 //   [opencode-mem]
 //   { "domain": "qna", "default_write_scope": "qna:channel:C123", ... }

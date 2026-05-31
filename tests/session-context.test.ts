@@ -4,7 +4,7 @@
 // Pure logic — no I/O, no filesystem.
 
 import { describe, it, expect } from "vitest";
-import { SessionContextStore } from "../src/services/session-context.js";
+import { SessionContextStore, parseMemScopeEnvelope } from "../src/services/session-context.js";
 
 describe("SessionContextStore.parseAndStrip", () => {
   const store = new SessionContextStore();
@@ -111,5 +111,35 @@ describe("SessionContextStore register/get/forget/parsed-tracking", () => {
     expect(store.hasParsed("s5")).toBe(true);
     store.forget("s5");
     expect(store.hasParsed("s5")).toBe(false);
+  });
+});
+
+describe("parseMemScopeEnvelope", () => {
+  it("extracts memScope from a JSON envelope", () => {
+    const sys = JSON.stringify({
+      slackContext: { channelId: "C", threadTs: "T", eventId: "E" },
+      memScope: { domain: "qna", default_write_scope: "qna:channel:C", default_read_scopes: ["qna:org"] },
+    });
+    expect(parseMemScopeEnvelope(sys)).toEqual({
+      domain: "qna",
+      default_write_scope: "qna:channel:C",
+      default_read_scopes: ["qna:org"],
+    });
+  });
+
+  it("returns null when memScope is absent", () => {
+    expect(parseMemScopeEnvelope(JSON.stringify({ slackContext: {} }))).toBeNull();
+  });
+
+  it("returns null on non-JSON input", () => {
+    expect(parseMemScopeEnvelope("not json")).toBeNull();
+  });
+
+  it("returns null on undefined", () => {
+    expect(parseMemScopeEnvelope(undefined)).toBeNull();
+  });
+
+  it("returns null on a malformed memScope (missing required fields)", () => {
+    expect(parseMemScopeEnvelope(JSON.stringify({ memScope: { domain: "qna" } }))).toBeNull();
   });
 });
