@@ -229,6 +229,41 @@ function buildMarkdownContext(
   return sections.join("\n");
 }
 
+export function buildCaptureSystemPrompt(langName: string, instructions: string | undefined): string {
+  if (instructions && instructions.trim()) {
+    return `${instructions.trim()}
+
+You MUST write the summary in ${langName}.
+Return type="skip" (with an empty summary) for anything that does not meet the capture criteria above.
+
+FORMAT:
+## Request
+[1-2 sentences: what was asked, in ${langName}]
+
+## Outcome
+[1-2 sentences: the answer/fact/decision, in ${langName}]`;
+  }
+  return `You are a technical memory recorder for a software development project.
+
+RULES:
+1. ONLY capture technical work (code, bugs, features, architecture, config)
+2. SKIP non-technical by returning type="skip"
+3. NO meta-commentary or behavior analysis
+4. Include specific file names, functions, technical details
+5. Generate 2-4 technical tags (e.g., "react", "auth", "bug-fix")
+6. You MUST write the summary in ${langName}.
+
+FORMAT:
+## Request
+[1-2 sentences: what was requested, in ${langName}]
+
+## Outcome
+[1-2 sentences: what was done, include files/functions, in ${langName}]
+
+SKIP if: greetings, casual chat, no code/decisions made
+CAPTURE if: code changed, bug fixed, feature added, decision made`;
+}
+
 async function generateSummary(
   context: string,
   sessionID: string,
@@ -263,25 +298,7 @@ async function generateSummary(
         : CONFIG.autoCaptureLanguage;
     const langName = getLanguageName(targetLang);
 
-    const systemPrompt = `You are a technical memory recorder for a software development project.
-
-RULES:
-1. ONLY capture technical work (code, bugs, features, architecture, config)
-2. SKIP non-technical by returning type="skip"
-3. NO meta-commentary or behavior analysis
-4. Include specific file names, functions, technical details
-5. Generate 2-4 technical tags (e.g., "react", "auth", "bug-fix")
-6. You MUST write the summary in ${langName}.
-
-FORMAT:
-## Request
-[1-2 sentences: what was requested, in ${langName}]
-
-## Outcome
-[1-2 sentences: what was done, include files/functions, in ${langName}]
-
-SKIP if: greetings, casual chat, no code/decisions made
-CAPTURE if: code changed, bug fixed, feature added, decision made`;
+    const systemPrompt = buildCaptureSystemPrompt(langName, CONFIG.autoCaptureInstructions);
 
     const aiPrompt = `${context}
 
@@ -330,25 +347,7 @@ Analyze this conversation. If it contains technical work (code, bugs, features, 
 
   const langName = getLanguageName(targetLang);
 
-  const systemPrompt = `You are a technical memory recorder for a software development project.
-
-RULES:
-1. ONLY capture technical work (code, bugs, features, architecture, config)
-2. SKIP non-technical by returning type="skip"
-3. NO meta-commentary or behavior analysis
-4. Include specific file names, functions, technical details
-5. Generate 2-4 technical tags (e.g., "react", "auth", "bug-fix")
-6. You MUST write the summary in ${langName}.
-
-FORMAT:
-## Request
-[1-2 sentences: what was requested, in ${langName}]
-
-## Outcome
-[1-2 sentences: what was done, include files/functions, in ${langName}]
-
-SKIP if: greetings, casual chat, no code/decisions made
-CAPTURE if: code changed, bug fixed, feature added, decision made`;
+  const systemPrompt = buildCaptureSystemPrompt(langName, CONFIG.autoCaptureInstructions);
 
   const aiPrompt = `${context}
 
