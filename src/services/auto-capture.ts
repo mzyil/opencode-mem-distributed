@@ -4,6 +4,7 @@ import { getTags } from "./tags.js";
 import { log } from "./logger.js";
 import { CONFIG } from "../config.js";
 import { userPromptManager } from "./user-prompt/user-prompt-manager.js";
+import { sessionContextStore } from "./session-context.js";
 
 interface ToolCallInfo {
   name: string;
@@ -74,6 +75,7 @@ export async function performAutoCapture(
       return;
     }
 
+    const writeScope = sessionContextStore.get(sessionID)?.default_write_scope;
     const result = await memoryClient.addMemory(summaryResult.summary, tags.project.tag, {
       source: "auto-capture" as any,
       type: summaryResult.type as any,
@@ -87,7 +89,7 @@ export async function performAutoCapture(
       projectPath: tags.project.projectPath,
       projectName: tags.project.projectName,
       gitRepoUrl: tags.project.gitRepoUrl,
-    });
+    }, writeScope);
 
     if (result.success) {
       userPromptManager.linkMemoryToPrompt(prompt.id, result.id);
