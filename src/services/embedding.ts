@@ -67,9 +67,34 @@ export class EmbeddingService {
   private async initializeModel(progressCallback?: (progress: any) => void): Promise<void> {
     try {
       if (CONFIG.embeddingApiUrl && CONFIG.embeddingApiKey) {
+        // Send a probe request to verify the API endpoint is actually reachable
+        // Uses a minimal embedding of "ping" to test the full request pipeline
+        const probeResponse = await withTimeout(
+          fetch(`${CONFIG.embeddingApiUrl}/embeddings`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${CONFIG.embeddingApiKey}`,
+            },
+            body: JSON.stringify({
+              input: "ping",
+              model: CONFIG.embeddingModel,
+            }),
+          }),
+          TIMEOUT_MS
+        );
+
+        if (!probeResponse.ok) {
+          throw new Error(
+            `Embedding API health check failed: ${probeResponse.status} ${probeResponse.statusText}`
+          );
+        }
+
         this.isWarmedUp = true;
         return;
       }
+
+      // Local model path
       const { pipeline } = await ensureTransformersLoaded();
       this.pipe = await pipeline("feature-extraction", CONFIG.embeddingModel, {
         progress_callback: progressCallback,
