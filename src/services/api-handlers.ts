@@ -159,11 +159,25 @@ export async function handleListMemories(
         allMemories.push(...memories);
       }
     } else {
-      const shards = shardManager.getAllShards("project", "");
-      for (const shard of shards) {
+      // Iterate both project- and user-scoped shards. Previously this only
+      // walked project shards, which silently hid user-scope memories from the
+      // listing endpoint (Web UI navigation, /api/memories without a tag
+      // filter, …). User-scope memories still showed up in /api/search and
+      // /api/stats `byType`, but were invisible in /api/stats `byScope` and
+      // unbrowseable in the UI — a confusing UX gap. The filter keeps the
+      // defense-in-depth check on container_tag, just widens it to both
+      // canonical scope markers.
+      const projectShards = shardManager.getAllShards("project", "");
+      const userShards = shardManager.getAllShards("user", "");
+      for (const shard of [...projectShards, ...userShards]) {
         const db = connectionManager.getConnection(shard.dbPath);
         const memories = vectorSearch.getAllMemories(db);
-        allMemories.push(...memories.filter((m: any) => m.container_tag?.includes(`_project_`)));
+        allMemories.push(
+          ...memories.filter(
+            (m: any) =>
+              m.container_tag?.includes("_project_") || m.container_tag?.includes("_user_")
+          )
+        );
       }
     }
 
