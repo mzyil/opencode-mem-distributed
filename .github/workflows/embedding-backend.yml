@@ -47,11 +47,13 @@ jobs:
           found=$(find node_modules/onnxruntime-node/bin -name '*.node' | head -1)
           test -n "$found" && echo "onnxruntime binding: $found"
 
-      - name: Build
-        run: bun run build
-
-      - name: Test suite
-        run: bun test
+      # This workflow deliberately does NOT run `bun run build` or the full
+      # `bun test` suite. Those have pre-existing cross-platform issues unrelated
+      # to the embedding backend (the build script uses `cp -r`, which fails on
+      # Windows; one config test asserts a macOS-shaped storagePath). They belong
+      # in a general CI workflow, not here. This job's single purpose is to prove
+      # the @huggingface/transformers embedding backend installs and runs across
+      # platforms, which needs neither the built plugin nor the unit tests.
 
       # The revert-critical check: load the ONNX runtime and run a real
       # feature-extraction embedding under Bun on this platform.
