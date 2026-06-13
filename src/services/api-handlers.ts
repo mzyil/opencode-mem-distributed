@@ -154,10 +154,17 @@ export async function handleListMemories(
       const scopeKey: ScopeKey = { scope, scopeHash: hash };
       allMemories = await store.list([scopeKey.scope], { containerTag: tag, limit: 10000 });
     } else {
+      // Walk both project- and user-scoped shards (upstream 7c6a5ec:
+      // show user-scope memories in /api/memories listing).
       const projectScopes = await store.listScopes("project");
-      for (const sk of projectScopes) {
+      const userScopes = await store.listScopes("user");
+      for (const sk of [...projectScopes, ...userScopes]) {
         const rows = await store.list([sk.scope], {});
-        allMemories.push(...rows.filter((m) => m.containerTag?.includes(`_project_`)));
+        allMemories.push(
+          ...rows.filter(
+            (m) => m.containerTag?.includes("_project_") || m.containerTag?.includes("_user_")
+          )
+        );
       }
     }
 
@@ -328,7 +335,6 @@ export async function handleAddMemory(data: {
       isPinned: false,
       metadata: { source: "api" },
     };
-
     const store = await getMemoryStore();
     await store.insert(scopeKey, row);
     return { success: true, data: { id } };
@@ -388,7 +394,6 @@ export async function handleUpdateMemory(
   try {
     if (!id) return { success: false, error: "id is required" };
     await embeddingService.warmup();
-
     const store = await getMemoryStore();
     const found = await findMemoryAcrossProjects(id);
     if (!found) return { success: false, error: "Memory not found" };
