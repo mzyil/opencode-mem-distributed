@@ -1,6 +1,5 @@
-import { shardManager } from "./sqlite/shard-manager.js";
-import { vectorSearch } from "./sqlite/vector-search.js";
-import { connectionManager } from "./sqlite/connection-manager.js";
+import { getMemoryStore } from "./storage/index.js";
+import type { MemoryRow, ScopeKey } from "./storage/types.js";
 import { CONFIG } from "../config.js";
 import { log } from "./logger.js";
 import { userPromptManager } from "./user-prompt/user-prompt-manager.js";
@@ -43,15 +42,21 @@ export class CleanupService {
     try {
       const cutoffTime = Date.now() - CONFIG.autoCleanupRetentionDays * 24 * 60 * 60 * 1000;
 
-      const userShards = shardManager.getAllShards("user", "");
-      const projectShards = shardManager.getAllShards("project", "");
-      const allShards = [...userShards, ...projectShards];
+      const store = await getMemoryStore();
+      const userScopes = await store.listScopes("user");
+      const projectScopes = await store.listScopes("project");
+      const allScopes: ScopeKey[] = [...userScopes, ...projectScopes];
 
+      // Collect every memory per-scope once; we need both pinned IDs
+      // and the full row set to filter by updatedAt < cutoff.
+      const memoriesByScope = new Map<ScopeKey, MemoryRow[]>();
       const pinnedMemoryIds = new Set<string>();
-      for (const shard of allShards) {
-        const db = connectionManager.getConnection(shard.dbPath);
-        const pinned = db.prepare(`SELECT id FROM memories WHERE is_pinned = 1`).all() as any[];
-        pinned.forEach((row) => pinnedMemoryIds.add(row.id));
+      for (const scope of allScopes) {
+        const rows = await store.list([scope.scope], {});
+        memoriesByScope.set(scope, rows);
+        for (const r of rows) {
+          if (r.isPinned) pinnedMemoryIds.add(r.id);
+        }
       }
 
       const promptCleanupResult = userPromptManager.deleteOldPrompts(cutoffTime);
@@ -65,21 +70,12 @@ export class CleanupService {
       let linkedMemoriesDeleted = 0;
       let pinnedSkipped = 0;
 
-      for (const shard of allShards) {
-        const db = connectionManager.getConnection(shard.dbPath);
-
-        const oldMemories = db
-          .prepare(
-            `
-          SELECT id, container_tag, is_pinned FROM memories 
-          WHERE updated_at < ?
-        `
-          )
-          .all(cutoffTime) as any[];
+      for (const [scope, rows] of memoriesByScope) {
+        const oldMemories = rows.filter((r) => r.updatedAt < cutoffTime);
 
         for (const memory of oldMemories) {
           try {
-            if (memory.is_pinned === 1) {
+            if (memory.isPinned) {
               pinnedSkipped++;
               continue;
             }
@@ -88,13 +84,12 @@ export class CleanupService {
               continue;
             }
 
-            await vectorSearch.deleteVector(db, memory.id, shard);
-            shardManager.decrementVectorCount(shard.id);
+            await store.delete(scope, memory.id);
             totalDeleted++;
 
-            if (memory.container_tag?.includes("_user_")) {
+            if (memory.containerTag?.includes("_user_")) {
               userDeleted++;
-            } else if (memory.container_tag?.includes("_project_")) {
+            } else if (memory.containerTag?.includes("_project_")) {
               projectDeleted++;
             }
           } catch (error) {

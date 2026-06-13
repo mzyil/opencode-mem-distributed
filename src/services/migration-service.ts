@@ -1,9 +1,15 @@
 import { shardManager } from "./sqlite/shard-manager.js";
 import { connectionManager } from "./sqlite/connection-manager.js";
-import { vectorSearch } from "./sqlite/vector-search.js";
+import { getMemoryStore } from "./storage/index.js";
+import type { MemoryRow, ScopeKey } from "./storage/types.js";
 import { embeddingService } from "./embedding.js";
 import { CONFIG } from "../config.js";
 import { log } from "./logger.js";
+
+// TODO(pr-2): remove direct shardManager / connectionManager access.
+// This service does v1->v2 schema/dimension migration over the legacy
+// SQLite shard layout (reads shard_metadata, deletes shard files).
+// Those operations have no MemoryStore equivalent yet.
 
 export interface DimensionMismatch {
   needsMigration: boolean;
@@ -15,6 +21,8 @@ export interface DimensionMismatch {
     storedDimensions: number;
     storedModel: string;
     vectorCount: number;
+    scope: string;
+    scopeHash: string;
   }>;
 }
 
@@ -39,6 +47,8 @@ export class MigrationService {
   private progressCallback?: (progress: MigrationProgress) => void;
 
   async detectDimensionMismatch(): Promise<DimensionMismatch> {
+    // TODO(pr-2): expose shard metadata through MemoryStore so this
+    // can drop the direct shardManager dependency.
     const userShards = shardManager.getAllShards("user", "");
     const projectShards = shardManager.getAllShards("project", "");
     const allShards = [...userShards, ...projectShards];
@@ -52,7 +62,7 @@ export class MigrationService {
         const metadataResult = db
           .prepare(
             `
-          SELECT key, value FROM shard_metadata 
+          SELECT key, value FROM shard_metadata
           WHERE key IN ('embedding_dimensions', 'embedding_model')
         `
           )
@@ -64,7 +74,8 @@ export class MigrationService {
         const storedModel = metadata.embedding_model || "unknown";
 
         if (storedDimensions !== CONFIG.embeddingDimensions) {
-          const vectorCount = vectorSearch.countAllVectors(db);
+          const countRow: any = db.prepare(`SELECT COUNT(*) AS c FROM memories`).get();
+          const vectorCount = countRow?.c ?? 0;
 
           mismatches.push({
             shardId: shard.id,
@@ -72,6 +83,8 @@ export class MigrationService {
             storedDimensions,
             storedModel,
             vectorCount,
+            scope: shard.scope,
+            scopeHash: shard.scopeHash,
           });
         }
       } catch (error) {
@@ -157,6 +170,7 @@ export class MigrationService {
           currentShard: String(shardInfo.shardId),
         });
 
+        // TODO(pr-2): MemoryStore has no shard-delete primitive (SQLite-specific).
         await shardManager.deleteShard(shardInfo.shardId);
         deletedShards++;
       } catch (error) {
@@ -200,6 +214,8 @@ export class MigrationService {
     let reEmbeddedCount = 0;
     let processedCount = 0;
 
+    const store = await getMemoryStore();
+
     for (const shardInfo of mismatch.shardMismatches) {
       this.reportProgress({
         phase: "re-embedding",
@@ -209,82 +225,100 @@ export class MigrationService {
       });
 
       try {
+        // Read every memory out of the legacy shard directly. We can't
+        // use store.list() here because it spans every shard in the
+        // scope and we only want to migrate this one shard's rows
+        // before deleting it.
         const db = connectionManager.getConnection(shardInfo.dbPath);
-        const memories = vectorSearch.getAllMemories(db);
+        const rawRows = db.prepare(`SELECT * FROM memories`).all() as any[];
 
-        const tempMemories: Array<{
+        type TempMemory = {
           id: string;
           content: string;
           containerTag: string;
           type: string | null;
           createdAt: number;
           updatedAt: number;
-          metadata: string | null;
+          metadata: Record<string, unknown> | null;
           displayName: string | null;
           userName: string | null;
           userEmail: string | null;
           projectPath: string | null;
           projectName: string | null;
           gitRepoUrl: string | null;
-          isPinned: number;
-        }> = [];
+          tags: string[] | null;
+          isPinned: boolean;
+        };
+        const tempMemories: TempMemory[] = rawRows.map((row) => ({
+          id: row.id,
+          content: row.content,
+          containerTag: row.container_tag,
+          type: row.type ?? null,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          metadata: row.metadata
+            ? (() => {
+                try {
+                  return JSON.parse(row.metadata);
+                } catch {
+                  return null;
+                }
+              })()
+            : null,
+          displayName: row.display_name ?? null,
+          userName: row.user_name ?? null,
+          userEmail: row.user_email ?? null,
+          projectPath: row.project_path ?? null,
+          projectName: row.project_name ?? null,
+          gitRepoUrl: row.git_repo_url ?? null,
+          tags: row.tags
+            ? String(row.tags)
+                .split(",")
+                .map((t: string) => t.trim())
+                .filter((t: string) => t)
+            : null,
+          isPinned: row.is_pinned === 1,
+        }));
 
-        for (const memory of memories) {
-          tempMemories.push({
-            id: memory.id,
-            content: memory.content,
-            containerTag: memory.container_tag,
-            type: memory.type,
-            createdAt: memory.created_at,
-            updatedAt: memory.updated_at,
-            metadata: memory.metadata,
-            displayName: memory.display_name,
-            userName: memory.user_name,
-            userEmail: memory.user_email,
-            projectPath: memory.project_path,
-            projectName: memory.project_name,
-            gitRepoUrl: memory.git_repo_url,
-            isPinned: memory.is_pinned || 0,
-          });
-        }
-
+        // TODO(pr-2): no MemoryStore equivalent for shard deletion.
         await shardManager.deleteShard(shardInfo.shardId);
+
+        const scope: ScopeKey = { scope: shardInfo.scope, scopeHash: shardInfo.scopeHash };
 
         for (const memory of tempMemories) {
           try {
             const vector = await embeddingService.embedWithTimeout(memory.content);
+            const tagsVector =
+              memory.tags && memory.tags.length > 0
+                ? await embeddingService.embedWithTimeout(memory.tags.join(", "))
+                : null;
 
-            const scope = memory.containerTag.includes("_user_") ? "user" : "project";
-            const hash = memory.containerTag.split("_").slice(2).join("_");
-            const newShard = shardManager.getWriteShard(scope, hash);
-            const newDb = connectionManager.getConnection(newShard.dbPath);
+            const row: MemoryRow = {
+              id: memory.id,
+              content: memory.content,
+              containerTag: memory.containerTag,
+              tags: memory.tags,
+              type: memory.type,
+              createdAt: memory.createdAt,
+              updatedAt: memory.updatedAt,
+              metadata: memory.metadata,
+              displayName: memory.displayName,
+              userName: memory.userName,
+              userEmail: memory.userEmail,
+              projectPath: memory.projectPath,
+              projectName: memory.projectName,
+              gitRepoUrl: memory.gitRepoUrl,
+              isPinned: memory.isPinned,
+              vector,
+              tagsVector,
+            };
 
-            await vectorSearch.insertVector(
-              newDb,
-              {
-                id: memory.id,
-                content: memory.content,
-                vector,
-                containerTag: memory.containerTag,
-                type: memory.type || undefined,
-                createdAt: memory.createdAt,
-                updatedAt: memory.updatedAt,
-                metadata: memory.metadata || undefined,
-                displayName: memory.displayName || undefined,
-                userName: memory.userName || undefined,
-                userEmail: memory.userEmail || undefined,
-                projectPath: memory.projectPath || undefined,
-                projectName: memory.projectName || undefined,
-                gitRepoUrl: memory.gitRepoUrl || undefined,
-              },
-              newShard
-            );
+            await store.insert(scope, row);
 
-            if (memory.isPinned === 1) {
-              vectorSearch.pinMemory(newDb, memory.id);
+            if (memory.isPinned) {
+              await store.setPinned(scope, memory.id, true);
             }
 
-            shardManager.incrementVectorCount(newShard.id);
             reEmbeddedCount++;
             processedCount++;
 

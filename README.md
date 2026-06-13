@@ -60,6 +60,56 @@ memory({ mode: "list", limit: 10 });
 
 Access the web interface at `http://127.0.0.1:4747` for visual memory browsing and management.
 
+## Scope conventions
+
+`scope` is a free-form string. The plugin does not interpret its
+contents — any string is valid. For applications that share a
+database across multiple surfaces, the recommended convention is:
+
+```
+scope := "<domain>:<type>:<id>"
+  domain : application surface — e.g. "qna", "code", "ops"
+  type   : entity kind          — e.g. "user", "channel"  (omitted when type == "org")
+  id     : opaque application-defined identifier
+```
+
+Examples:
+
+| Scope                | Meaning                                                  |
+| -------------------- | -------------------------------------------------------- |
+| `qna:user:U12345`    | Memories private to user U12345 in the QnA surface       |
+| `qna:channel:C67890` | Memories shared in channel C67890 (QnA only)             |
+| `qna:org`            | Org-wide memories on the QnA surface                     |
+| `code:user:U12345`   | Memories private to U12345 in the code/streaming surface |
+
+Reads can span scopes via the `scopes: string[]` argument; writes
+target a single scope via `scope: string`.
+
+## Session-default scope directive
+
+If your application prepends a JSON block of the form:
+
+```text
+[opencode-mem]
+{
+  "domain": "qna",
+  "default_write_scope": "qna:channel:C67890",
+  "default_read_scopes": ["qna:user:U12345", "qna:channel:C67890", "qna:org"],
+  "peer_domains": ["code"]
+}
+[/opencode-mem]
+```
+
+to the first system message of each session, the plugin will:
+
+1. parse it out of the message (the LLM never sees the directive),
+2. use those scopes as the per-call default when the tool is invoked
+   without an explicit `scope`/`scopes` argument.
+
+The directive is parsed once at session start; later messages are
+left untouched. Malformed directives are silently ignored — they
+must never break the chat.
+
 ## Configuration Essentials
 
 Configure at `~/.config/opencode/opencode-mem.jsonc`:
@@ -102,6 +152,34 @@ Configure at `~/.config/opencode/opencode-mem.jsonc`:
   },
 }
 ```
+
+### Remote storage (experimental)
+
+Point opencode-mem at a remote database by adding a `storage` block to
+`~/.config/opencode/opencode-mem.jsonc`:
+
+```jsonc
+{
+  "storage": {
+    "recordStore": { "kind": "postgres", "url": "env://DATABASE_URL", "poolSize": 4 },
+    "vectorBackend": { "kind": "usearch" },
+  },
+}
+```
+
+`recordStore.kind` accepts `sqlite` (default), `postgres`, or `libsql`. `vectorBackend.kind` accepts `usearch` (default) or `exact-scan`. Valid combinations: any record store with `usearch` or `exact-scan`; `postgres` additionally supports `pgvector` (reserved for a future release).
+
+To migrate from a local SQLite store to a remote backend:
+
+```bash
+opencode-mem-migrate --to postgres --url "$DATABASE_URL"
+# or
+opencode-mem-migrate --to libsql --url "libsql://your.turso.io" --auth-token "$TOKEN"
+```
+
+The migration is idempotent — re-running with `--resume` skips rows that already exist on the target.
+
+For multi-agent / distributed deployments, see [`examples/README.md`](examples/README.md).
 
 ### Memory Scope
 

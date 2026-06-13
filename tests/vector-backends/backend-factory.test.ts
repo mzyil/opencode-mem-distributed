@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { createVectorBackend } from "../../src/services/vector-backends/backend-factory.js";
 import type { VectorBackend } from "../../src/services/vector-backends/types.js";
 
-function createThrowingBackend(method: "search" | "rebuildFromShard"): VectorBackend {
+function createThrowingBackend(method: "search" | "rebuildFromSource"): VectorBackend {
   return {
     getBackendName: () => "usearch",
     insert: async () => {},
@@ -13,11 +13,11 @@ function createThrowingBackend(method: "search" | "rebuildFromShard"): VectorBac
       void args;
       return [];
     },
-    rebuildFromShard: async (args) => {
-      if (method === "rebuildFromShard") throw new Error("boom-rebuild");
+    rebuildFromSource: async (args) => {
+      if (method === "rebuildFromSource") throw new Error("boom-rebuild");
       void args;
     },
-    deleteShardIndexes: async () => {},
+    dropNamespace: async () => {},
   };
 }
 
@@ -66,20 +66,10 @@ describe("vector backend factory", () => {
     });
 
     const result = await backend.search({
-      db: {
-        prepare: () => ({
-          all: () => [],
-        }),
-      },
-      shard: {
-        id: 1,
+      ns: {
         scope: "project",
         scopeHash: "hash",
         shardIndex: 0,
-        dbPath: "test.db",
-        vectorCount: 0,
-        isActive: true,
-        createdAt: Date.now(),
       },
       kind: "content",
       queryVector: new Float32Array([1, 0, 0, 0]),
@@ -94,23 +84,22 @@ describe("vector backend factory", () => {
     const backend = await createVectorBackend({
       vectorBackend: "usearch-first",
       probeUSearch: async () => true,
-      createUSearchBackend: () => createThrowingBackend("rebuildFromShard"),
+      createUSearchBackend: () => createThrowingBackend("rebuildFromSource"),
     });
 
+    async function* emptySource(): AsyncIterable<{ id: string; vector: Float32Array }> {
+      // no rows
+    }
+
     await expect(
-      backend.rebuildFromShard({
-        db: null,
-        shard: {
-          id: 1,
+      backend.rebuildFromSource({
+        ns: {
           scope: "project",
           scopeHash: "hash",
           shardIndex: 0,
-          dbPath: "test.db",
-          vectorCount: 0,
-          isActive: true,
-          createdAt: Date.now(),
         },
         kind: "content",
+        source: emptySource(),
       })
     ).resolves.toBeUndefined();
 

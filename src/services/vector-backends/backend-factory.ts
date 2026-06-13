@@ -41,21 +41,19 @@ class FallbackAwareBackend implements VectorBackend {
     }
   }
 
-  async rebuildFromShard(args: Parameters<VectorBackend["rebuildFromShard"]>[0]): Promise<void> {
+  async rebuildFromSource(args: Parameters<VectorBackend["rebuildFromSource"]>[0]): Promise<void> {
     try {
-      await this.activeBackend.rebuildFromShard(args);
+      await this.activeBackend.rebuildFromSource(args);
     } catch (error) {
       this.logDegrade("rebuild", error);
       this.activeBackend = this.fallback;
-      await this.fallback.rebuildFromShard(args);
+      await this.fallback.rebuildFromSource(args);
     }
   }
 
-  async deleteShardIndexes(
-    args: Parameters<VectorBackend["deleteShardIndexes"]>[0]
-  ): Promise<void> {
-    await this.primary.deleteShardIndexes(args);
-    await this.fallback.deleteShardIndexes(args);
+  async dropNamespace(args: Parameters<VectorBackend["dropNamespace"]>[0]): Promise<void> {
+    await this.primary.dropNamespace(args);
+    await this.fallback.dropNamespace(args);
   }
 
   private logDegrade(operation: string, error: unknown): void {

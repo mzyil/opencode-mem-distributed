@@ -1,22 +1,8 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { getDatabase } from "../../src/services/sqlite/sqlite-bootstrap.js";
+import { describe, expect, it } from "bun:test";
 import { ExactScanBackend } from "../../src/services/vector-backends/exact-scan-backend.js";
-
-const Database = getDatabase();
+import type { NamespaceKey } from "../../src/services/vector-backends/types.js";
 
 describe("ExactScanBackend", () => {
-  const tempDirs: string[] = [];
-
-  afterEach(() => {
-    while (tempDirs.length > 0) {
-      const dir = tempDirs.pop();
-      if (dir) rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
   it("returns nearest vectors in similarity order", () => {
     const backend = new ExactScanBackend();
 
@@ -38,32 +24,23 @@ describe("ExactScanBackend", () => {
   });
 
   it("searches vectors from sqlite blobs in similarity order", async () => {
-    const tempDir = mkdtempSync(join(tmpdir(), "exact-scan-backend-"));
-    tempDirs.push(tempDir);
-    const db = new Database(join(tempDir, "test.db"));
-
-    db.run(`CREATE TABLE memories (id TEXT PRIMARY KEY, vector BLOB, tags_vector BLOB)`);
-
-    const insert = db.prepare(`INSERT INTO memories (id, vector, tags_vector) VALUES (?, ?, ?)`);
-    insert.run("a", new Uint8Array(new Float32Array([1, 0, 0, 0]).buffer), null);
-    insert.run("b", new Uint8Array(new Float32Array([0, 1, 0, 0]).buffer), null);
-    insert.run("c", new Uint8Array(new Float32Array([0.9, 0.1, 0, 0]).buffer), null);
-
     const backend = new ExactScanBackend();
-    const shard = {
-      id: 1,
-      scope: "project" as const,
+    const ns: NamespaceKey = {
+      scope: "project",
       scopeHash: "hash",
       shardIndex: 0,
-      dbPath: join(tempDir, "test.db"),
-      vectorCount: 3,
-      isActive: true,
-      createdAt: Date.now(),
     };
 
+    async function* source(): AsyncIterable<{ id: string; vector: Float32Array }> {
+      yield { id: "a", vector: new Float32Array([1, 0, 0, 0]) };
+      yield { id: "b", vector: new Float32Array([0, 1, 0, 0]) };
+      yield { id: "c", vector: new Float32Array([0.9, 0.1, 0, 0]) };
+    }
+
+    await backend.rebuildFromSource({ ns, kind: "content", source: source() });
+
     const result = await backend.search({
-      db,
-      shard,
+      ns,
       kind: "content",
       queryVector: new Float32Array([1, 0, 0, 0]),
       limit: 2,
@@ -73,26 +50,21 @@ describe("ExactScanBackend", () => {
   });
 
   it("returns empty search result when sqlite has no vectors", async () => {
-    const tempDir = mkdtempSync(join(tmpdir(), "exact-scan-backend-empty-"));
-    tempDirs.push(tempDir);
-    const db = new Database(join(tempDir, "test.db"));
-    db.run(`CREATE TABLE memories (id TEXT PRIMARY KEY, vector BLOB, tags_vector BLOB)`);
-
     const backend = new ExactScanBackend();
-    const shard = {
-      id: 1,
-      scope: "project" as const,
+    const ns: NamespaceKey = {
+      scope: "project",
       scopeHash: "hash",
       shardIndex: 0,
-      dbPath: join(tempDir, "test.db"),
-      vectorCount: 0,
-      isActive: true,
-      createdAt: Date.now(),
     };
 
+    async function* emptySource(): AsyncIterable<{ id: string; vector: Float32Array }> {
+      // no rows
+    }
+
+    await backend.rebuildFromSource({ ns, kind: "content", source: emptySource() });
+
     const result = await backend.search({
-      db,
-      shard,
+      ns,
       kind: "content",
       queryVector: new Float32Array([1, 0, 0, 0]),
       limit: 2,

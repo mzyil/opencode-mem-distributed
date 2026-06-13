@@ -2,10 +2,8 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getDatabase } from "../../src/services/sqlite/sqlite-bootstrap.js";
+import type { NamespaceKey } from "../../src/services/vector-backends/types.js";
 import { USearchBackend } from "../../src/services/vector-backends/usearch-backend.js";
-
-const Database = getDatabase();
 
 describe("USearchBackend", () => {
   const tempDirs: string[] = [];
@@ -42,28 +40,22 @@ describe("USearchBackend", () => {
     const baseDir = mkdtempSync(join(tmpdir(), "usearch-backend-public-"));
     tempDirs.push(baseDir);
 
-    const shard = {
-      id: 1,
-      scope: "project" as const,
+    const ns: NamespaceKey = {
+      scope: "project",
       scopeHash: "hash",
       shardIndex: 0,
-      dbPath: join(baseDir, "test.db"),
-      vectorCount: 1,
-      isActive: true,
-      createdAt: Date.now(),
     };
 
     const backend = new USearchBackend({ baseDir, dimensions: 4 });
     await backend.insert({
       id: "alpha",
       vector: new Float32Array([1, 0, 0, 0]),
-      shard,
+      ns,
       kind: "content",
     });
 
     const result = await backend.search({
-      db: null,
-      shard,
+      ns,
       kind: "content",
       queryVector: new Float32Array([1, 0, 0, 0]),
       limit: 1,
@@ -76,34 +68,28 @@ describe("USearchBackend", () => {
     const baseDir = mkdtempSync(join(tmpdir(), "usearch-backend-upsert-"));
     tempDirs.push(baseDir);
 
-    const shard = {
-      id: 1,
-      scope: "project" as const,
+    const ns: NamespaceKey = {
+      scope: "project",
       scopeHash: "hash",
       shardIndex: 0,
-      dbPath: join(baseDir, "test.db"),
-      vectorCount: 1,
-      isActive: true,
-      createdAt: Date.now(),
     };
 
     const backend = new USearchBackend({ baseDir, dimensions: 4 });
     await backend.insert({
       id: "alpha",
       vector: new Float32Array([0, 1, 0, 0]),
-      shard,
+      ns,
       kind: "content",
     });
     await backend.insert({
       id: "alpha",
       vector: new Float32Array([1, 0, 0, 0]),
-      shard,
+      ns,
       kind: "content",
     });
 
     const result = await backend.search({
-      db: null,
-      shard,
+      ns,
       kind: "content",
       queryVector: new Float32Array([1, 0, 0, 0]),
       limit: 1,
@@ -115,31 +101,22 @@ describe("USearchBackend", () => {
   it("rebuilds an index from sqlite rows", async () => {
     const baseDir = mkdtempSync(join(tmpdir(), "usearch-backend-rebuild-"));
     tempDirs.push(baseDir);
-    const db = new Database(join(baseDir, "test.db"));
-    db.run(`CREATE TABLE memories (id TEXT PRIMARY KEY, vector BLOB, tags_vector BLOB)`);
-    db.prepare(`INSERT INTO memories (id, vector, tags_vector) VALUES (?, ?, ?)`).run(
-      "alpha",
-      new Uint8Array(new Float32Array([1, 0, 0, 0]).buffer),
-      null
-    );
 
-    const shard = {
-      id: 1,
-      scope: "project" as const,
+    const ns: NamespaceKey = {
+      scope: "project",
       scopeHash: "hash",
       shardIndex: 0,
-      dbPath: join(baseDir, "test.db"),
-      vectorCount: 1,
-      isActive: true,
-      createdAt: Date.now(),
     };
 
+    async function* source(): AsyncIterable<{ id: string; vector: Float32Array }> {
+      yield { id: "alpha", vector: new Float32Array([1, 0, 0, 0]) };
+    }
+
     const backend = new USearchBackend({ baseDir, dimensions: 4 });
-    await backend.rebuildFromShard({ db, shard, kind: "content" });
+    await backend.rebuildFromSource({ ns, kind: "content", source: source() });
 
     const result = await backend.search({
-      db,
-      shard,
+      ns,
       kind: "content",
       queryVector: new Float32Array([1, 0, 0, 0]),
       limit: 1,

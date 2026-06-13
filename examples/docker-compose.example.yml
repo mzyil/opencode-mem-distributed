@@ -1,0 +1,63 @@
+# examples/docker-compose.example.yml
+# Reference deployment: opencode-mem + Postgres+pgvector on a single host.
+# Copy to docker-compose.yml, fill in the env values, then:
+#   docker compose up -d
+# The `migrate` service runs the schema migration once, then exits. The `opencode`
+# agent waits for it via depends_on.condition: service_completed_successfully.
+version: "3.9"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: opencode
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: opencode_mem
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U opencode"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    image: node:20-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://opencode:${POSTGRES_PASSWORD}@postgres:5432/opencode_mem
+    working_dir: /app
+    volumes:
+      - ./:/app
+      - opencode-mem-cache:/root/.opencode-mem
+    command:
+      - sh
+      - -c
+      - |
+        npx --yes opencode-mem-migrate \
+          --to postgres \
+          --url "$DATABASE_URL"
+    restart: "no"
+
+  opencode:
+    image: ghcr.io/opencode-ai/opencode:latest
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql://opencode:${POSTGRES_PASSWORD}@postgres:5432/opencode_mem
+      OPENCODE_MEM_CONFIG: /etc/opencode-mem.jsonc
+    volumes:
+      - ./examples/opencode-mem.example.jsonc:/etc/opencode-mem.jsonc:ro
+      - opencode-data:/root/.opencode
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  opencode-data:
+  opencode-mem-cache:

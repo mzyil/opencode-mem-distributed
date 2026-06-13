@@ -254,7 +254,7 @@ export class WebServer {
       return;
     }
 
-    this.server.stop();
+    await this.server.stop();
     this.server = null;
     this.isOwner = false;
   }

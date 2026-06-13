@@ -4,6 +4,13 @@ import { homedir } from "node:os";
 import { stripJsoncComments } from "./services/jsonc.js";
 import { resolveSecretValue } from "./services/secret-resolver.js";
 
+// Resolve env://, file://, or literal, then strip trailing slashes so callers
+// can construct paths as `${url}/embeddings` without producing `//embeddings`.
+function resolveBaseUrl(value: string | undefined): string | undefined {
+  const resolved = resolveSecretValue(value);
+  return resolved ? resolved.replace(/\/+$/, "") : resolved;
+}
+
 const CONFIG_DIR = join(homedir(), ".config", "opencode");
 const DATA_DIR = join(homedir(), ".opencode-mem");
 const CONFIG_FILES = [
@@ -24,7 +31,9 @@ interface OpenCodeMemConfig {
   userEmailOverride?: string;
   userNameOverride?: string;
   memory?: {
-    defaultScope?: "project" | "all-projects";
+    // Fallback scope used when neither the explicit arg nor the session directive provides one.
+    // Keep the legacy "project" value as default so upstream users get unchanged behavior.
+    defaultScope: string;
   };
   embeddingModel?: string;
   embeddingDimensions?: number;
@@ -39,6 +48,7 @@ interface OpenCodeMemConfig {
   autoCaptureMaxIterations?: number;
   autoCaptureIterationTimeout?: number;
   autoCaptureLanguage?: string;
+  autoCaptureInstructions?: string;
   memoryProvider?: "openai-chat" | "openai-responses" | "anthropic";
   memoryModel?: string;
   memoryApiUrl?: string;
@@ -77,6 +87,13 @@ interface OpenCodeMemConfig {
     maxAgeDays?: number;
     injectOn?: "first" | "always";
   };
+  storage?: {
+    recordStore?:
+      | { kind: "sqlite" }
+      | { kind: "postgres"; url: string; ssl?: boolean; poolSize?: number }
+      | { kind: "libsql"; url: string; authToken?: string };
+    vectorBackend?: { kind: "usearch" } | { kind: "exact-scan" } | { kind: "pgvector" };
+  };
 }
 
 const DEFAULTS: Required<
@@ -93,8 +110,10 @@ const DEFAULTS: Required<
     | "opencodeProvider"
     | "opencodeModel"
     | "autoCaptureLanguage"
+    | "autoCaptureInstructions"
     | "userEmailOverride"
     | "userNameOverride"
+    | "storage"
   >
 > & {
   embeddingApiUrl?: string;
@@ -109,10 +128,13 @@ const DEFAULTS: Required<
   opencodeModel?: string;
   vectorBackend?: "usearch-first" | "usearch" | "exact-scan";
   autoCaptureLanguage?: string;
+  autoCaptureInstructions?: string;
   userEmailOverride?: string;
   userNameOverride?: string;
-  memory?: {
-    defaultScope?: "project" | "all-projects";
+  memory: {
+    // Fallback scope used when neither the explicit arg nor the session directive provides one.
+    // Keep the legacy "project" value as default so upstream users get unchanged behavior.
+    defaultScope: string;
   };
 } = {
   storagePath: join(DATA_DIR, "data"),
@@ -487,14 +509,16 @@ function getEmbeddingDimensions(model: string): number {
 
 function buildConfig(fileConfig: OpenCodeMemConfig) {
   return {
-    storagePath: expandPath(fileConfig.storagePath ?? DEFAULTS.storagePath),
+    storagePath: expandPath(
+      process.env.OPENCODE_MEM_STORAGE_PATH ?? fileConfig.storagePath ?? DEFAULTS.storagePath
+    ),
     userEmailOverride: fileConfig.userEmailOverride,
     userNameOverride: fileConfig.userNameOverride,
     embeddingModel: fileConfig.embeddingModel ?? DEFAULTS.embeddingModel,
     embeddingDimensions:
       fileConfig.embeddingDimensions ??
       getEmbeddingDimensions(fileConfig.embeddingModel ?? DEFAULTS.embeddingModel),
-    embeddingApiUrl: fileConfig.embeddingApiUrl,
+    embeddingApiUrl: resolveBaseUrl(fileConfig.embeddingApiUrl),
     embeddingApiKey: fileConfig.embeddingApiUrl
       ? resolveSecretValue(fileConfig.embeddingApiKey ?? process.env.OPENAI_API_KEY)
       : undefined,
@@ -509,12 +533,13 @@ function buildConfig(fileConfig: OpenCodeMemConfig) {
     autoCaptureIterationTimeout:
       fileConfig.autoCaptureIterationTimeout ?? DEFAULTS.autoCaptureIterationTimeout,
     autoCaptureLanguage: fileConfig.autoCaptureLanguage,
+    autoCaptureInstructions: fileConfig.autoCaptureInstructions,
     memoryProvider: (fileConfig.memoryProvider ?? "openai-chat") as
       | "openai-chat"
       | "openai-responses"
       | "anthropic",
     memoryModel: fileConfig.memoryModel,
-    memoryApiUrl: fileConfig.memoryApiUrl,
+    memoryApiUrl: resolveBaseUrl(fileConfig.memoryApiUrl),
     memoryApiKey: resolveSecretValue(fileConfig.memoryApiKey),
     memoryTemperature: fileConfig.memoryTemperature,
     memoryExtraParams: fileConfig.memoryExtraParams,
@@ -565,7 +590,44 @@ function buildConfig(fileConfig: OpenCodeMemConfig) {
         | "first"
         | "always",
     },
+    storage: {
+      recordStore: resolveRecordStoreConfig(fileConfig.storage?.recordStore),
+      vectorBackend: resolveVectorBackendConfig(
+        fileConfig.storage?.vectorBackend,
+        fileConfig.vectorBackend // legacy field; back-compat fallback
+      ),
+    },
   };
+}
+
+function resolveRecordStoreConfig(cfg: any) {
+  if (!cfg || cfg.kind === "sqlite") return { kind: "sqlite" as const };
+  if (cfg.kind === "postgres") {
+    return {
+      kind: "postgres" as const,
+      url: resolveSecretValue(cfg.url) ?? "",
+      ssl: cfg.ssl ?? false,
+      poolSize: cfg.poolSize ?? 4,
+    };
+  }
+  if (cfg.kind === "libsql") {
+    return {
+      kind: "libsql" as const,
+      url: resolveSecretValue(cfg.url) ?? "",
+      authToken: resolveSecretValue(cfg.authToken),
+    };
+  }
+  throw new Error(`Unknown storage.recordStore.kind: ${cfg.kind}`);
+}
+
+function resolveVectorBackendConfig(
+  cfg: any,
+  legacy: "usearch-first" | "usearch" | "exact-scan" | undefined
+) {
+  if (cfg?.kind) return { kind: cfg.kind as "usearch" | "exact-scan" | "pgvector" };
+  // Map legacy field. "usearch-first" → "usearch" (the factory still probes).
+  if (legacy === "exact-scan") return { kind: "exact-scan" as const };
+  return { kind: "usearch" as const };
 }
 
 let _globalFileConfig = loadConfigFromPaths(CONFIG_FILES);
