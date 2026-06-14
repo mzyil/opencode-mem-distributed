@@ -191,17 +191,19 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
       });
   }
 
+  const cleanupPlugin = async () => {
+    if (webServer) await webServer.stop();
+    try {
+      await resetMemoryStore();
+    } catch (error) {
+      log("MemoryStore close failed", { error: String(error) });
+    }
+    if (memoryClient) memoryClient.close();
+  };
+
   const shutdownHandler = async () => {
     try {
-      if (webServer) {
-        await webServer.stop();
-      }
-      try {
-        await resetMemoryStore();
-      } catch (error) {
-        log("MemoryStore close failed", { error: String(error) });
-      }
-      await memoryClient.close();
+      await cleanupPlugin();
       process.exit(0);
     } catch (error) {
       log("Shutdown error", { error: String(error) });
@@ -211,6 +213,10 @@ export const OpenCodeMemPlugin: Plugin = async (ctx: PluginInput) => {
 
   process.on("SIGINT", shutdownHandler);
   process.on("SIGTERM", shutdownHandler);
+  process.on("exit", () => {
+    if (webServer) webServer.stop().catch(() => {});
+    if (memoryClient) memoryClient.close();
+  });
 
   return {
     "chat.message": async (input, output) => {

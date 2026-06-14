@@ -10,10 +10,10 @@ describe("OpenCode plugin loader bundle boundary", () => {
 
     expect(result.success).toBe(true);
     const output = await result.outputs[0]!.text();
-    expect(output).not.toContain("node_modules/@xenova/transformers");
-    expect(output).not.toContain("@xenova/transformers/src");
-    expect(output).not.toContain("@xenova/transformers/dist");
     expect(output).not.toContain("node_modules/@huggingface/transformers");
+    expect(output).not.toContain("@huggingface/transformers/src");
     expect(output).not.toContain("@huggingface/transformers/dist");
+    // Guard against the old backend silently coming back too.
+    expect(output).not.toContain("node_modules/@xenova/transformers");
   });
 });

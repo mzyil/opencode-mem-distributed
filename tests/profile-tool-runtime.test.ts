@@ -126,6 +126,7 @@ mock.module(${JSON.stringify(clientUrl)}, async () => ({
     ...memoryClient,
     isReady: async () => true,
     warmup: async () => {},
+    close: () => {},
   },
 }));
 

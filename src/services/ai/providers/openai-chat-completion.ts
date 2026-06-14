@@ -70,6 +70,21 @@ function hasNonEmptyChoices(data: unknown): data is ToolCallResponse {
   return true;
 }
 
+function extractFirstJSON(raw: string): string | null {
+  let depth = 0;
+  let start = -1;
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] === "{" || raw[i] === "[") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (raw[i] === "}" || raw[i] === "]") {
+      depth--;
+      if (depth === 0) return raw.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
 export class OpenAIChatCompletionProvider extends BaseAIProvider {
   private readonly aiSessionManager: AISessionManager;
 
@@ -209,6 +224,7 @@ export class OpenAIChatCompletionProvider extends BaseAIProvider {
     let iterations = 0;
     const maxIterations = this.config.maxIterations ?? 5;
     const iterationTimeout = this.config.iterationTimeout ?? 30000;
+    let lastErrorMessage = "";
 
     while (iterations < maxIterations) {
       iterations++;
@@ -347,7 +363,19 @@ export class OpenAIChatCompletionProvider extends BaseAIProvider {
 
             if (toolCall.function.name === toolSchema.function.name) {
               try {
-                const parsed = JSON.parse(toolCall.function.arguments);
+                const parsed = (() => {
+                  const raw = toolCall.function.arguments;
+                  if (typeof raw !== "string") {
+                    return JSON.parse(JSON.stringify(raw));
+                  }
+                  try {
+                    return JSON.parse(raw);
+                  } catch (e1) {
+                    const fixed = extractFirstJSON(raw);
+                    if (fixed) return JSON.parse(fixed);
+                    throw e1;
+                  }
+                })();
                 const result = UserProfileValidator.validate(parsed);
                 if (!result.valid) {
                   throw new Error(result.errors.join(", "));
@@ -381,6 +409,7 @@ export class OpenAIChatCompletionProvider extends BaseAIProvider {
                 });
 
                 const errorMessage = `Validation failed: ${String(validationError)}`;
+                lastErrorMessage = errorMessage;
                 this.addToolResponse(
                   session.id,
                   messages,
@@ -409,8 +438,9 @@ export class OpenAIChatCompletionProvider extends BaseAIProvider {
         }
 
         const retrySequence = this.aiSessionManager.getLastSequence(session.id) + 1;
-        const retryPrompt =
-          "Please use the save_memories tool to extract and save the memories from the conversation as instructed.";
+        const retryPrompt = lastErrorMessage
+          ? `Your previous attempt failed. Error: ${lastErrorMessage}. Please fix the JSON in your tool call arguments and try again. Output ONLY valid JSON, no extra text outside the JSON structure.`
+          : "Please use the tool to extract and save the data as instructed.";
 
         this.aiSessionManager.addMessage({
           aiSessionId: session.id,

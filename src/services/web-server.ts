@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { Readable } from "node:stream";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { log } from "./logger.js";
@@ -28,6 +30,104 @@ import {
   handleRefreshProfile,
 } from "./api-handlers.js";
 
+/**
+ * Runtime-portable HTTP server handle.
+ *
+ * Under Bun we delegate to `Bun.serve` which is the fastest path on that
+ * runtime. Under Node we use `node:http` and adapt between IncomingMessage/
+ * ServerResponse and the Web `Request`/`Response` primitives used by the
+ * fetch-style handler.
+ *
+ * Both paths expose the same minimal surface — `stop()` and `url` — that the
+ * rest of this class relies on, so the WebServer class itself does not need
+ * to branch.
+ */
+interface PortableServerHandle {
+  stop(): void;
+}
+
+const isBun = typeof (globalThis as { Bun?: unknown }).Bun !== "undefined";
+
+function serveFetch(opts: {
+  port: number;
+  hostname: string;
+  fetch: (req: Request) => Promise<Response>;
+}): PortableServerHandle {
+  if (isBun) {
+    const bunHandle = (
+      globalThis as { Bun: { serve: (opts: unknown) => { stop: () => void } } }
+    ).Bun.serve({
+      port: opts.port,
+      hostname: opts.hostname,
+      fetch: opts.fetch,
+    });
+    return { stop: () => bunHandle.stop() };
+  }
+
+  // Node path: wrap node:http around the fetch-style handler. The adapter
+  // converts IncomingMessage → Web Request and Web Response → ServerResponse.
+  // Bodies stream both directions via the WHATWG Streams ↔ Node Streams
+  // helpers that ship with Node 18+.
+  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    try {
+      const url = `http://${opts.hostname}:${opts.port}${req.url ?? "/"}`;
+      const method = req.method ?? "GET";
+      const hasBody = method !== "GET" && method !== "HEAD";
+      const webReq = new Request(url, {
+        method,
+        headers: req.headers as Record<string, string>,
+        body: hasBody ? (Readable.toWeb(req) as unknown as ReadableStream) : undefined,
+        // `duplex: "half"` is required by Node fetch when sending a body
+        // stream. Cast keeps TS happy on older lib.dom.d.ts revisions.
+        ...(hasBody ? ({ duplex: "half" } as Record<string, unknown>) : {}),
+      });
+
+      const webRes = await opts.fetch(webReq);
+      res.statusCode = webRes.status;
+      webRes.headers.forEach((value, name) => res.setHeader(name, value));
+      res.setHeader("Connection", "close");
+
+      if (webRes.body) {
+        Readable.fromWeb(webRes.body as unknown as Parameters<typeof Readable.fromWeb>[0]).pipe(
+          res
+        );
+      } else {
+        res.end();
+      }
+    } catch (error) {
+      if (!res.headersSent) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "text/plain");
+      }
+      res.end(`Internal Server Error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+
+  // Surface EADDRINUSE synchronously so callers can detect the
+  // already-running-instance case the same way they do under Bun.
+  let listenError: Error | undefined;
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      listenError = err;
+    }
+  });
+  server.listen({ port: opts.port, host: opts.hostname, reuseAddr: true });
+  server.unref();
+  server.timeout = 30000;
+  server.keepAliveTimeout = 10000;
+  server.headersTimeout = 11000;
+
+  if (listenError) {
+    throw listenError;
+  }
+  return {
+    stop: () => {
+      server.closeAllConnections();
+      server.close();
+    },
+  };
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -38,7 +138,7 @@ interface WebServerConfig {
 }
 
 export class WebServer {
-  private server: ReturnType<typeof Bun.serve> | null = null;
+  private server: PortableServerHandle | null = null;
   private config: WebServerConfig;
   private isOwner: boolean = false;
   private startPromise: Promise<void> | null = null;
@@ -68,7 +168,7 @@ export class WebServer {
     }
 
     try {
-      this.server = Bun.serve({
+      this.server = serveFetch({
         port: this.config.port,
         hostname: this.config.host,
         fetch: this.handleRequest.bind(this),
