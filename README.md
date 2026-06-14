@@ -219,6 +219,39 @@ Supported providers: any provider listed by `opencode providers list` (e.g. `ant
 
 Full documentation available in this README.
 
+## Public Subpath Exports
+
+In addition to the main plugin entry, `opencode-mem` exposes one stable subpath
+that other opencode plugins can import directly. This avoids having to
+reverse-engineer container-tag conventions when writing third-party tools that
+read or write into the same memory store.
+
+### `opencode-mem/tags`
+
+Canonical container-tag helpers. The same functions opencode-mem itself uses
+to scope auto-captured memories.
+
+```ts
+import { getProjectTagInfo, getUserTagInfo, getTags } from "opencode-mem/tags";
+
+// Canonical project tag derived from cwd (git remote URL if present, else
+// the project root path). Format: `opencode_project_<sha16>`.
+const projectTag = getProjectTagInfo(process.cwd()).tag;
+
+// Canonical user tag derived from `git config user.email`.
+// Format: `opencode_user_<sha16>`.
+const userTag = getUserTagInfo().tag;
+
+// Both at once.
+const { user, project } = getTags(process.cwd());
+```
+
+Tags produced by these helpers match what auto-capture writes, so third-party
+plugins that call `POST /api/memories` will land in the same shards the rest
+of the system already understands. Hand-rolled tags whose substring isn't
+`_project_` or `_user_` end up in shadow shards that `/api/stats` and
+`/api/memories` silently filter out — using these helpers avoids that pitfall.
+
 ## Development & Contribution
 
 Build and test locally:

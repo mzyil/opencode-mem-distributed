@@ -108,6 +108,23 @@ export class UserPromptManager {
     return result.changes > 0;
   }
 
+  /**
+   * Release a previously claimed prompt back to the pending state so it can
+   * be retried by a future capture cycle. Used when capture aborts before
+   * either successfully writing a memory or explicitly skipping the prompt
+   * (e.g. transient network error, missing AI response, plugin restart).
+   *
+   * Only rows still marked as in-progress (captured = 2) are touched, so
+   * concurrent callers that already finished the capture cannot be reverted.
+   */
+  releaseClaim(promptId: string): boolean {
+    const stmt = this.db.prepare(
+      `UPDATE user_prompts SET captured = 0 WHERE id = ? AND captured = 2`
+    );
+    const result = stmt.run(promptId);
+    return result.changes > 0;
+  }
+
   countUncapturedPrompts(): number {
     const stmt = this.db.prepare(`SELECT COUNT(*) as count FROM user_prompts WHERE captured = 0`);
     const row = stmt.get() as any;
