@@ -2,7 +2,7 @@ import { embeddingService } from "./embedding.js";
 import { getMemoryStore } from "./storage/index.js";
 import type { MemoryRow, ScopeKey } from "./storage/types.js";
 import { CONFIG } from "../config.js";
-import { log } from "./logger.js";
+import { formatError, log } from "./logger.js";
 import type { MemoryType } from "../types/index.js";
 
 export type MemoryScope = string;
@@ -54,7 +54,7 @@ export class LocalMemoryClient {
         this.isInitialized = true;
       } catch (error) {
         this.initPromise = null;
-        log("Storage initialization failed", { error: String(error) });
+        log("Storage initialization failed", { error: formatError(error) });
         throw error;
       }
     })();
@@ -281,7 +281,7 @@ export class LocalMemoryClient {
         pagination: { currentPage: 1, totalItems: memories.length, totalPages: 1 },
       };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatError(error);
       log("listMemories: error", { error: errorMessage });
       return {
         success: false as const,

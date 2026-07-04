@@ -1,6 +1,6 @@
 // src/services/storage/factory.ts
 import { CONFIG } from "../../config.js";
-import { log } from "../logger.js";
+import { formatError, log } from "../logger.js";
 import { createVectorBackend } from "../vector-backends/backend-factory.js";
 import { PgvectorBackend } from "../vector-backends/pgvector-backend.js";
 import { MemoryStore } from "./memory-store.js";
@@ -45,8 +45,15 @@ export async function createMemoryStore(): Promise<MemoryStore> {
     try {
       await rs.init();
     } catch (err) {
-      log("Postgres init failed; cannot use pgvector", { error: String(err) });
-      throw err;
+      // A Postgres connect/migration failure (e.g. the DB endpoint no longer resolves)
+      // must NOT kill all of memory. Previously this re-threw, so a dead DB took down
+      // every memory operation (listMemories etc.). Degrade to a local sqlite + USearch
+      // store so memory keeps working (per-container, non-shared) instead of failing hard.
+      log("Postgres init failed; degrading to local sqlite + USearch memory store", {
+        error: formatError(err),
+      });
+      await rs.close().catch(() => {});
+      return createLocalFallbackStore();
     }
     try {
       const vb = new PgvectorBackend({
@@ -56,7 +63,7 @@ export async function createMemoryStore(): Promise<MemoryStore> {
       await vb.init();
       return new MemoryStore(rs, vb);
     } catch (err) {
-      log("Pgvector unavailable; falling back to USearch", { error: String(err) });
+      log("Pgvector unavailable; falling back to USearch", { error: formatError(err) });
       await rs.close();
       const rsFallback = new PostgresRecordStore({
         url: rsCfg.url,
@@ -77,6 +84,19 @@ export async function createMemoryStore(): Promise<MemoryStore> {
     vectorBackend: vbCfg.kind === "exact-scan" ? "exact-scan" : "usearch",
   });
   return new MemoryStore(recordStore, vectorBackend);
+}
+
+// Local, dependency-free memory store used when the configured Postgres record store
+// cannot initialize. sqlite (on the container's local disk) + USearch keep memory
+// functional in a degraded, per-container mode rather than failing hard.
+async function createLocalFallbackStore(): Promise<MemoryStore> {
+  const rs = new SqliteRecordStore({
+    storagePath: CONFIG.storagePath,
+    embeddingDimensions: CONFIG.embeddingDimensions,
+  });
+  await rs.init();
+  const vb = await createVectorBackend({ vectorBackend: "usearch" });
+  return new MemoryStore(rs, vb);
 }
 
 function createRecordStore(cfg: typeof CONFIG.storage.recordStore): RecordStore {

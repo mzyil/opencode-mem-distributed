@@ -60,3 +60,33 @@ export function log(message: string, data?: unknown) {
     : `[${timestamp}] ${message}\n`;
   appendFileSync(logFile, line);
 }
+
+/**
+ * Render an unknown thrown value into a diagnostic string, walking the `.cause`
+ * chain so a wrapper like `new Error("Migration failed", { cause })` surfaces the
+ * ROOT error (e.g. `getaddrinfo ENOTFOUND ...`) instead of a generic message.
+ *
+ * The plugin previously logged `String(err)` / `err.message` at several sites, which
+ * dropped `.cause` and reduced real failures to `Migration failed: <unknown>`. Route
+ * error logging through this so the actual cause is never masked again.
+ */
+export function formatError(err: unknown): string {
+  const chain: string[] = [];
+  const seen = new Set<unknown>();
+  let cur: unknown = err;
+  while (cur && !seen.has(cur)) {
+    seen.add(cur);
+    if (cur instanceof Error) {
+      chain.push(`${cur.name}: ${cur.message}`);
+      cur = (cur as { cause?: unknown }).cause;
+    } else {
+      try {
+        chain.push(typeof cur === "string" ? cur : JSON.stringify(cur));
+      } catch {
+        chain.push(String(cur));
+      }
+      cur = undefined;
+    }
+  }
+  return chain.length ? chain.join(" <- caused by: ") : String(err);
+}
