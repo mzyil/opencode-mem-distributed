@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONFIG } from "../../../config.js";
+import { formatError } from "../../logger.js";
 
 export async function runMigrations(
   db: Kysely<any>,
@@ -22,8 +23,16 @@ export async function runMigrations(
   }
   const { error, results } = await migrator.migrateToLatest();
   if (error) {
-    const failed =
-      results?.find((r: MigrationResult) => r.status === "Error")?.migrationName ?? "<unknown>";
-    throw new Error(`Migration failed: ${failed}`, { cause: error });
+    // Kysely returns errors here rather than throwing. `results` is populated only when a
+    // migration body failed; a SETUP-phase failure (DB connect, creating the migration
+    // bookkeeping tables, lock acquisition, reading the migration folder) leaves `results`
+    // undefined. Distinguish the two and ALWAYS carry the real error as `cause` — the old
+    // code interpolated only the migration name, so setup failures printed the useless
+    // "Migration failed: <unknown>" that masked errors like `getaddrinfo ENOTFOUND`.
+    const failed = results?.find((r: MigrationResult) => r.status === "Error")?.migrationName;
+    const where = failed
+      ? `migration ${failed}`
+      : "migration setup (connect / bookkeeping tables / lock / migration folder)";
+    throw new Error(`Migration failed at ${where}: ${formatError(error)}`, { cause: error });
   }
 }
