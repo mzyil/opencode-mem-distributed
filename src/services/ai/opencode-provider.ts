@@ -94,6 +94,57 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   });
 }
 
+// JSON-Schema keywords that Bedrock's constrained-decoding grammar does not
+// implement for some providers. Anthropic models tolerate them, but MiniMax /
+// GLM reject the request with `Grammar error: Unimplemented keys: [...]`. In
+// particular `additionalProperties:false` is translated into a `propertyNames`
+// grammar rule that those decoders don't support. Stripping these yields a
+// lowest-common-denominator schema accepted by every provider; the returned
+// object is still validated by Zod afterwards, so dropping the strictness here
+// costs nothing.
+const GRAMMAR_INCOMPATIBLE_SCHEMA_KEYS = new Set([
+  "$schema",
+  "$id",
+  "additionalProperties",
+  "propertyNames",
+  "unevaluatedProperties",
+  "patternProperties",
+]);
+
+/**
+ * Deep-clone a JSON Schema with grammar-incompatible keywords removed at every
+ * level. Pure — never mutates the input.
+ */
+export function sanitizeJsonSchemaForGrammar(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    return schema.map((entry) => sanitizeJsonSchemaForGrammar(entry));
+  }
+  if (schema && typeof schema === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(schema)) {
+      if (GRAMMAR_INCOMPATIBLE_SCHEMA_KEYS.has(key)) continue;
+      out[key] = sanitizeJsonSchemaForGrammar(value);
+    }
+    return out;
+  }
+  return schema;
+}
+
+/**
+ * True when an error looks like a Bedrock grammar/schema-shape rejection (a
+ * provider whose constrained decoder doesn't implement some JSON-Schema keyword)
+ * rather than a transient failure. Used to decide when to retry with a
+ * sanitized schema.
+ */
+export function isSchemaShapeError(error: unknown): boolean {
+  const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return (
+    msg.includes("grammar error") ||
+    msg.includes("unimplemented keys") ||
+    msg.includes("propertynames")
+  );
+}
+
 /**
  * Generate one structured-output completion via opencode's v2 API.
  *
@@ -121,12 +172,18 @@ export async function generateStructuredOutput<T>(opts: StructuredOutputOptions<
   // zod v4 exposes JSON Schema export natively (instance `.toJSONSchema()`
   // and global `z.toJSONSchema()`); we prefer instance, fall back to global.
   // This avoids pulling in a separate `zod-to-json-schema` dependency.
-  const jsonSchema =
+  const fullJsonSchema =
     (
       schema as unknown as {
         toJSONSchema?: () => Record<string, unknown>;
       }
     ).toJSONSchema?.() ?? (await import("zod")).z.toJSONSchema(schema);
+
+  // Start strict (works for Anthropic decoders). If a grammar-decoder provider
+  // (MiniMax / GLM) rejects the shape, we recover by re-sending a sanitized
+  // schema on the next attempt — see the catch block below.
+  let activeJsonSchema: Record<string, unknown> = fullJsonSchema as Record<string, unknown>;
+  let recoveredSchemaShape = false;
 
   let lastError: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -153,7 +210,7 @@ export async function generateStructuredOutput<T>(opts: StructuredOutputOptions<
           parts: [{ type: "text", text: userPrompt }],
           format: {
             type: "json_schema",
-            schema: jsonSchema as Record<string, unknown>,
+            schema: activeJsonSchema,
             ...(retryCount !== undefined ? { retryCount } : {}),
           },
           // Must be false: with noReply=true, opencode records the user message
@@ -197,6 +254,15 @@ export async function generateStructuredOutput<T>(opts: StructuredOutputOptions<
       return schema.parse(info.structured);
     } catch (error) {
       lastError = error;
+      // Grammar-shape recovery: a provider whose constrained decoder rejects a
+      // JSON-Schema keyword (MiniMax/GLM → `Unimplemented keys: [propertyNames]`).
+      // Re-send a sanitized schema on the next attempt and retry immediately —
+      // no backoff, since this is deterministic, not transient. Only once.
+      if (!recoveredSchemaShape && isSchemaShapeError(error)) {
+        activeJsonSchema = sanitizeJsonSchemaForGrammar(fullJsonSchema) as Record<string, unknown>;
+        recoveredSchemaShape = true;
+        continue;
+      }
       // Linear backoff before the next attempt; capture is best-effort, so we
       // retry every failure (timeout, throttle, transient 5xx, or a one-off
       // invalid/empty structured result) rather than classifying error types.

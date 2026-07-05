@@ -10,6 +10,7 @@ export default defineConfig({
       "tests/scope-free-form.test.ts",
       "tests/session-context.test.ts",
       "tests/pgvector-scope-filter.test.ts",
+      "tests/opencode-provider-sanitize.test.ts",
     ],
     testTimeout: 30_000,
   },
