@@ -172,17 +172,27 @@ export async function generateStructuredOutput<T>(opts: StructuredOutputOptions<
   // zod v4 exposes JSON Schema export natively (instance `.toJSONSchema()`
   // and global `z.toJSONSchema()`); we prefer instance, fall back to global.
   // This avoids pulling in a separate `zod-to-json-schema` dependency.
-  const fullJsonSchema =
+  const rawJsonSchema =
     (
       schema as unknown as {
         toJSONSchema?: () => Record<string, unknown>;
       }
     ).toJSONSchema?.() ?? (await import("zod")).z.toJSONSchema(schema);
 
-  // Start strict (works for Anthropic decoders). If a grammar-decoder provider
-  // (MiniMax / GLM) rejects the shape, we recover by re-sending a sanitized
-  // schema on the next attempt — see the catch block below.
-  let activeJsonSchema: Record<string, unknown> = fullJsonSchema as Record<string, unknown>;
+  // Sanitize up front so attempt #1 already uses the lowest-common-denominator
+  // schema every provider's constrained decoder accepts. Anthropic decoders
+  // tolerate the strict keys, but grammar-decoder providers (MiniMax / GLM /
+  // DeepSeek V4 Flash) reject them with `Unimplemented keys: [...]`; sending the
+  // strict shape first would waste a guaranteed-failing round-trip (doubled
+  // latency + a discarded transient session) on every non-Anthropic capture.
+  // Safe because the returned object is still `schema.parse()`-validated below,
+  // and zod `z.object` strips unknown keys — dropping provider-side strictness
+  // costs nothing in correctness.
+  let activeJsonSchema: Record<string, unknown> = sanitizeJsonSchemaForGrammar(
+    rawJsonSchema
+  ) as Record<string, unknown>;
+  // Belt-and-suspenders: the reactive retry (catch block below) stays as an
+  // inert fallback for any future provider that rejects a *different* keyword.
   let recoveredSchemaShape = false;
 
   let lastError: unknown;
@@ -254,12 +264,13 @@ export async function generateStructuredOutput<T>(opts: StructuredOutputOptions<
       return schema.parse(info.structured);
     } catch (error) {
       lastError = error;
-      // Grammar-shape recovery: a provider whose constrained decoder rejects a
-      // JSON-Schema keyword (MiniMax/GLM → `Unimplemented keys: [propertyNames]`).
-      // Re-send a sanitized schema on the next attempt and retry immediately —
-      // no backoff, since this is deterministic, not transient. Only once.
+      // Grammar-shape recovery (inert fallback): the schema is already sanitized
+      // up front, so this only fires if a future provider rejects a *different*
+      // keyword. Re-sanitizing `rawJsonSchema` is idempotent here; kept so the
+      // recovery path is still wired if the keyset ever needs to grow. Retried
+      // immediately (deterministic, not transient) and only once.
       if (!recoveredSchemaShape && isSchemaShapeError(error)) {
-        activeJsonSchema = sanitizeJsonSchemaForGrammar(fullJsonSchema) as Record<string, unknown>;
+        activeJsonSchema = sanitizeJsonSchemaForGrammar(rawJsonSchema) as Record<string, unknown>;
         recoveredSchemaShape = true;
         continue;
       }

@@ -50,19 +50,26 @@ describe("sanitizeJsonSchemaForGrammar", () => {
   });
 });
 
-describe("generateStructuredOutput grammar recovery", () => {
-  it("retries with a sanitized schema after a grammar-shape error, then succeeds", async () => {
+describe("generateStructuredOutput proactive sanitization", () => {
+  const captureSchema = z.object({
+    summary: z.string(),
+    type: z.string(),
+    tags: z.array(z.string()),
+  });
+
+  it("sends an already-sanitized schema on attempt #1 — no wasted grammar-failure round-trip", async () => {
     const promptCalls: Array<{ schema: unknown }> = [];
-    // Fake opencode client: a grammar-decoder provider (MiniMax/GLM) that rejects
-    // any schema carrying `additionalProperties`, and only produces structured
-    // output once it receives the sanitized shape.
+    // Fake opencode client modelling a grammar-decoder provider (MiniMax/GLM):
+    // it REJECTS any schema still carrying `additionalProperties`/`propertyNames`.
+    // With proactive sanitization the very first prompt already omits them, so
+    // this provider must succeed on the first call with no thrown-away attempt.
     const fakeClient = {
       session: {
         create: async () => ({ data: { id: "ses_grammar_test" } }),
         prompt: async (args: { format: { schema: unknown } }) => {
           promptCalls.push({ schema: args.format.schema });
-          const isStrict = JSON.stringify(args.format.schema).includes("additionalProperties");
-          if (isStrict) {
+          const stillStrict = JSON.stringify(args.format.schema).includes("additionalProperties");
+          if (stillStrict) {
             return {
               data: {
                 info: {
@@ -80,12 +87,6 @@ describe("generateStructuredOutput grammar recovery", () => {
       },
     };
 
-    const schema = z.object({
-      summary: z.string(),
-      type: z.string(),
-      tags: z.array(z.string()),
-    });
-
     const result = await generateStructuredOutput({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       client: fakeClient as any,
@@ -93,13 +94,45 @@ describe("generateStructuredOutput grammar recovery", () => {
       modelID: "minimax.minimax-m2.5",
       systemPrompt: "sys",
       userPrompt: "usr",
-      schema,
+      schema: captureSchema,
     });
 
     expect(result).toEqual({ summary: "s", type: "feature", tags: ["a"] });
-    expect(promptCalls).toHaveLength(2);
-    // First attempt sent the strict schema; the recovery re-sent the sanitized one.
-    expect(JSON.stringify(promptCalls[0].schema)).toContain("additionalProperties");
-    expect(JSON.stringify(promptCalls[1].schema)).not.toContain("additionalProperties");
+    // Exactly one call: no failed strict attempt to recover from.
+    expect(promptCalls).toHaveLength(1);
+    // The first (and only) schema sent is already the lowest-common-denominator shape.
+    const firstSchema = JSON.stringify(promptCalls[0].schema);
+    expect(firstSchema).not.toContain("additionalProperties");
+    expect(firstSchema).not.toContain("propertyNames");
+    expect(firstSchema).not.toContain("$schema");
+  });
+
+  it("still succeeds in a single call on an Anthropic-style decoder (no behaviour regression)", async () => {
+    const promptCalls: Array<{ schema: unknown }> = [];
+    // A permissive decoder that accepts any schema shape. Proactive sanitization
+    // must not change the happy path here: one call, valid Zod-parsed output.
+    const fakeClient = {
+      session: {
+        create: async () => ({ data: { id: "ses_anthropic_test" } }),
+        prompt: async (args: { format: { schema: unknown } }) => {
+          promptCalls.push({ schema: args.format.schema });
+          return { data: { info: { structured: { summary: "s", type: "feature", tags: ["a"] } } } };
+        },
+        delete: async () => ({}),
+      },
+    };
+
+    const result = await generateStructuredOutput({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      client: fakeClient as any,
+      providerID: "amazon-bedrock",
+      modelID: "eu.anthropic.claude-sonnet-4-6",
+      systemPrompt: "sys",
+      userPrompt: "usr",
+      schema: captureSchema,
+    });
+
+    expect(result).toEqual({ summary: "s", type: "feature", tags: ["a"] });
+    expect(promptCalls).toHaveLength(1);
   });
 });
